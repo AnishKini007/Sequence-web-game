@@ -296,11 +296,20 @@ function handleCellClick(row, col) {
     
     // Handle One-Eyed Jack (remove opponent chip)
     if (selectedCard.rank === 'J' && selectedCard.type === 'one-eyed') {
+        console.log('[OneEyedJack] Attempting to remove chip at', row, col);
+        console.log('[OneEyedJack] Cell chip:', cell.chip, 'Player team:', currentPlayer.team.color, 'In sequence:', cell.inSequence);
         if (cell.chip && cell.chip !== currentPlayer.team.color && !cell.inSequence) {
+            console.log('[OneEyedJack] Removing chip');
             removeChip(row, col);
             finishTurn();
         } else {
-            alert('You can only remove an opponent\'s chip that is not part of a completed sequence!');
+            if (!cell.chip) {
+                alert('You must select a space with an opponent\'s chip!');
+            } else if (cell.chip === currentPlayer.team.color) {
+                alert('You cannot remove your own team\'s chip!');
+            } else if (cell.inSequence) {
+                alert('You cannot remove a chip that is part of a completed sequence!');
+            }
         }
         return;
     }
@@ -362,6 +371,7 @@ function removeChip(row, col) {
 
 function finishTurn() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
+    const playedCard = gameState.selectedCard;
     
     // Remove played card from hand
     const cardIndex = currentPlayer.hand.indexOf(gameState.selectedCard);
@@ -369,32 +379,63 @@ function finishTurn() {
         currentPlayer.hand.splice(cardIndex, 1);
     }
     
-    // Draw new card
-    if (gameState.deck.length > 0) {
-        currentPlayer.hand.push(gameState.deck.pop());
-    }
-    
     gameState.selectedCard = null;
     
-    // Check win condition
-    if (checkWinCondition()) {
-        endGame();
-        return;
-    }
-    
-    // Next player
-    gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
-    
-    // Broadcast turn change in multiplayer
-    if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
-        sendGameAction({
-            type: 'next-turn',
-            playerIndex: gameState.currentPlayerIndex,
-            updatedPlayer: {
-                id: currentPlayer.id,
-                hand: currentPlayer.hand
+    // In multiplayer mode
+    if (gameState.multiplayerMode && typeof multiplayerState !== 'undefined') {
+        if (multiplayerState.isHost) {
+            // HOST: Draw card and broadcast turn change
+            let drawnCard = null;
+            if (gameState.deck.length > 0) {
+                drawnCard = gameState.deck.pop();
+                currentPlayer.hand.push(drawnCard);
             }
-        });
+            
+            // Check win condition
+            if (checkWinCondition()) {
+                endGame();
+                return;
+            }
+            
+            // Next player
+            gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+            
+            // Broadcast turn change
+            if (typeof sendGameAction === 'function') {
+                sendGameAction({
+                    type: 'next-turn',
+                    playerIndex: gameState.currentPlayerIndex,
+                    updatedPlayer: {
+                        id: currentPlayer.id,
+                        hand: currentPlayer.hand
+                    },
+                    drawnCard: drawnCard
+                });
+            }
+        } else {
+            // CLIENT: Request card draw from host
+            if (typeof sendGameAction === 'function') {
+                sendGameAction({
+                    type: 'client-turn-complete',
+                    playerId: currentPlayer.id,
+                    playedCard: playedCard
+                });
+            }
+        }
+    } else {
+        // Local game: Normal card draw
+        if (gameState.deck.length > 0) {
+            currentPlayer.hand.push(gameState.deck.pop());
+        }
+        
+        // Check win condition
+        if (checkWinCondition()) {
+            endGame();
+            return;
+        }
+        
+        // Next player
+        gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
     }
     
     updateUI();
@@ -617,6 +658,10 @@ function renderCardElement(card, container) {
 }
 
 function selectCard(card) {
+    console.log('[SelectCard] Selected card:', card);
+    if (card.rank === 'J') {
+        console.log('[SelectCard] Jack type:', card.type);
+    }
     gameState.selectedCard = card;
     renderPlayerHand();
 }

@@ -596,12 +596,63 @@ function handleGameAction(action) {
         if (action.updatedPlayer && gameState.players[action.updatedPlayer.id]) {
             gameState.players[action.updatedPlayer.id].hand = action.updatedPlayer.hand;
         }
+        // If it's now my turn and a card was drawn, add it to my hand
+        if (action.drawnCard && action.updatedPlayer.id === multiplayerState.myPlayerId) {
+            // Card already updated in hand above, just log for debugging
+            console.log('[Client] Received updated hand with drawn card:', action.drawnCard);
+        }
         updateUI();
     } else if (action.type === 'update-sequences') {
         // Update sequence counts without recalculating
         gameState.sequenceCounts = action.sequenceCounts;
         renderBoard();
         updateUI();
+    } else if (action.type === 'client-turn-complete') {
+        // HOST ONLY: Handle client finishing their turn
+        if (multiplayerState.isHost) {
+            console.log('[Host] Client finished turn, drawing card for player', action.playerId);
+            const player = gameState.players[action.playerId];
+            
+            // Draw new card for the player
+            let drawnCard = null;
+            if (gameState.deck.length > 0) {
+                drawnCard = gameState.deck.pop();
+                player.hand.push(drawnCard);
+                console.log('[Host] Drew card for player:', drawnCard);
+            }
+            
+            // Check win condition
+            const wasMultiplayer = gameState.multiplayerMode;
+            gameState.multiplayerMode = false;
+            const hasWon = checkWinCondition();
+            gameState.multiplayerMode = wasMultiplayer;
+            
+            if (hasWon) {
+                // Handle win
+                endGame();
+                return;
+            }
+            
+            // Next player
+            gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+            
+            // Broadcast turn change to all clients
+            broadcastToAll({
+                type: 'game-action',
+                action: {
+                    type: 'next-turn',
+                    playerIndex: gameState.currentPlayerIndex,
+                    updatedPlayer: {
+                        id: action.playerId,
+                        hand: player.hand
+                    },
+                    drawnCard: drawnCard
+                }
+            });
+            
+            // Update host UI
+            updateUI();
+        }
     }
 }
 
