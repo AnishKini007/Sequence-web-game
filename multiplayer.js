@@ -597,7 +597,17 @@ function handleGameAction(action) {
         if (action.updatedPlayer && gameState.players[action.updatedPlayer.id]) {
             const player = gameState.players[action.updatedPlayer.id];
             console.log('[Client] Updating player', action.updatedPlayer.id, 'hand from', player.hand.length, 'to', action.updatedPlayer.hand.length, 'cards');
-            player.hand = action.updatedPlayer.hand;
+            
+            // Fix Jack cards in the updated hand
+            const fixedHand = action.updatedPlayer.hand.map(card => {
+                if (card.rank === 'J' && !card.type) {
+                    card.type = getJackType(card.suit);
+                    console.log('[Client] Fixed Jack card type in hand update:', card.suit, '->', card.type);
+                }
+                return card;
+            });
+            
+            player.hand = fixedHand;
             
             // If this is my hand, log it
             if (action.updatedPlayer.id === multiplayerState.myPlayerId) {
@@ -745,10 +755,20 @@ function deserializeGameState(serializedState) {
     // Recreate players
     gameState.players = serializedState.players.map(p => {
         const team = gameState.teams[p.teamIndex];
+        
+        // Fix Jack cards that might be missing type property
+        const hand = p.hand.map(card => {
+            if (card.rank === 'J' && !card.type) {
+                card.type = getJackType(card.suit);
+                console.log('[Deserialize] Fixed Jack card type:', card.suit, '->', card.type);
+            }
+            return card;
+        });
+        
         const player = {
             id: p.id,
             name: p.name,
-            hand: p.hand,
+            hand: hand,
             team: team
         };
         team.players.push(player);

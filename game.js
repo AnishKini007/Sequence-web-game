@@ -283,6 +283,14 @@ function handleCellClick(row, col) {
     
     const selectedCard = gameState.selectedCard;
     
+    // Ensure Jack has type (safety check)
+    if (selectedCard.rank === 'J' && !selectedCard.type) {
+        selectedCard.type = getJackType(selectedCard.suit);
+        console.log('[handleCellClick] Fixed missing Jack type:', selectedCard.type);
+    }
+    
+    console.log('[handleCellClick] Processing click with card:', selectedCard);
+    
     // Handle Two-Eyed Jack (wild card)
     if (selectedCard.rank === 'J' && selectedCard.type === 'two-eyed') {
         if (!cell.chip && !cell.isCorner) {
@@ -373,15 +381,22 @@ function finishTurn() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     const playedCard = gameState.selectedCard;
     
+    console.log('[FinishTurn] Played card:', playedCard);
+    
     gameState.selectedCard = null;
     
     // In multiplayer mode
     if (gameState.multiplayerMode && typeof multiplayerState !== 'undefined') {
         if (multiplayerState.isHost) {
             // HOST: Remove card, draw new card, and broadcast turn change
-            const cardIndex = currentPlayer.hand.indexOf(playedCard);
+            const cardIndex = currentPlayer.hand.findIndex(c => 
+                c.rank === playedCard.rank && c.suit === playedCard.suit
+            );
             if (cardIndex > -1) {
                 currentPlayer.hand.splice(cardIndex, 1);
+                console.log('[Host] Removed card from hand at index', cardIndex);
+            } else {
+                console.warn('[Host] Could not find played card in hand!');
             }
             
             let drawnCard = null;
@@ -426,7 +441,9 @@ function finishTurn() {
         }
     } else {
         // Local game: Remove card and draw new one
-        const cardIndex = currentPlayer.hand.indexOf(playedCard);
+        const cardIndex = currentPlayer.hand.findIndex(c => 
+            c.rank === playedCard.rank && c.suit === playedCard.suit
+        );
         if (cardIndex > -1) {
             currentPlayer.hand.splice(cardIndex, 1);
         }
@@ -630,6 +647,12 @@ function renderPlayerHand() {
 }
 
 function renderCardElement(card, container) {
+    // Ensure Jack cards have their type set
+    if (card.rank === 'J' && !card.type) {
+        card.type = getJackType(card.suit);
+        console.log('[RenderCard] Fixed missing Jack type for', card.suit, '- assigned:', card.type);
+    }
+    
     const cardElement = document.createElement('div');
     cardElement.className = 'card';
         
@@ -642,6 +665,7 @@ function renderCardElement(card, container) {
                     ${card.type === 'two-eyed' ? 'WILD' : 'REMOVE'}
                 </div>
             `;
+            console.log('[RenderCard] Jack card:', card.suit, 'Type:', card.type);
         } else {
             const suitClass = getSuitName(card.suit);
             cardElement.innerHTML = `
@@ -656,7 +680,10 @@ function renderCardElement(card, container) {
             cardElement.title = 'Dead card - both spaces occupied';
         }
         
-        if (gameState.selectedCard === card) {
+        // Check if this card is selected (compare by rank and suit, not reference)
+        if (gameState.selectedCard && 
+            gameState.selectedCard.rank === card.rank && 
+            gameState.selectedCard.suit === card.suit) {
             cardElement.classList.add('selected');
         }
         
@@ -665,11 +692,20 @@ function renderCardElement(card, container) {
 }
 
 function selectCard(card) {
+    // Ensure Jack cards have their type set
+    if (card.rank === 'J' && !card.type) {
+        card.type = getJackType(card.suit);
+        console.log('[SelectCard] Fixed missing Jack type for', card.suit, '- assigned:', card.type);
+    }
+    
     console.log('[SelectCard] Selected card:', card);
     if (card.rank === 'J') {
-        console.log('[SelectCard] Jack type:', card.type);
+        console.log('[SelectCard] Jack suit:', card.suit, 'Type:', card.type);
+        console.log('[SelectCard] Expected type for suit:', getJackType(card.suit));
     }
-    gameState.selectedCard = card;
+    
+    // Store a copy of the card to avoid reference issues
+    gameState.selectedCard = { ...card };
     renderPlayerHand();
 }
 
@@ -729,8 +765,17 @@ function highlightSelectableCells() {
     
     const selectedCard = gameState.selectedCard;
     
+    // Ensure Jack has type for highlighting
+    if (selectedCard.rank === 'J' && !selectedCard.type) {
+        selectedCard.type = getJackType(selectedCard.suit);
+        console.log('[Highlight] Fixed missing Jack type:', selectedCard.type);
+    }
+    
+    console.log('[Highlight] Highlighting for card:', selectedCard);
+    
     // Two-eyed Jack - highlight all empty cells
     if (selectedCard.rank === 'J' && selectedCard.type === 'two-eyed') {
+        console.log('[Highlight] Two-eyed Jack - highlighting empty cells');
         document.querySelectorAll('.board-cell').forEach(cell => {
             const row = parseInt(cell.dataset.row);
             const col = parseInt(cell.dataset.col);
@@ -746,6 +791,9 @@ function highlightSelectableCells() {
     // One-eyed Jack - highlight removable opponent chips
     if (selectedCard.rank === 'J' && selectedCard.type === 'one-eyed') {
         const currentPlayer = gameState.players[gameState.currentPlayerIndex];
+        console.log('[Highlight] One-eyed Jack - highlighting opponent chips');
+        console.log('[Highlight] Current player team:', currentPlayer.team.color);
+        let highlightCount = 0;
         document.querySelectorAll('.board-cell').forEach(cell => {
             const row = parseInt(cell.dataset.row);
             const col = parseInt(cell.dataset.col);
@@ -753,8 +801,10 @@ function highlightSelectableCells() {
             
             if (boardCell.chip && boardCell.chip !== currentPlayer.team.color && !boardCell.inSequence) {
                 cell.classList.add('selectable');
+                highlightCount++;
             }
         });
+        console.log('[Highlight] Highlighted', highlightCount, 'opponent chips');
         return;
     }
     
