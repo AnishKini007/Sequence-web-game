@@ -318,7 +318,10 @@ function handleCellClick(row, col) {
 function placeChip(row, col, color) {
     gameState.board[row][col].chip = color;
     
-    // Broadcast action in multiplayer
+    checkForSequences();
+    renderBoard();
+    
+    // Broadcast action in multiplayer (after local update)
     if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
         sendGameAction({
             type: 'place-chip',
@@ -326,25 +329,35 @@ function placeChip(row, col, color) {
             col: col,
             color: color
         });
+        
+        // Also send sequence update
+        sendGameAction({
+            type: 'update-sequences',
+            sequenceCounts: gameState.sequenceCounts
+        });
     }
-    
-    checkForSequences();
-    renderBoard();
 }
 
 function removeChip(row, col) {
     gameState.board[row][col].chip = null;
     
-    // Broadcast action in multiplayer
+    checkForSequences();
+    renderBoard();
+    
+    // Broadcast action in multiplayer (after local update)
     if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
         sendGameAction({
             type: 'remove-chip',
             row: row,
             col: col
         });
+        
+        // Also send sequence update
+        sendGameAction({
+            type: 'update-sequences',
+            sequenceCounts: gameState.sequenceCounts
+        });
     }
-    
-    renderBoard();
 }
 
 function finishTurn() {

@@ -15,10 +15,27 @@ let multiplayerState = {
     connectionTimeout: null
 };
 
-// PeerJS configuration - use PeerJS Cloud servers (includes TURN)
+// PeerJS configuration - use free public TURN servers for better cross-network connectivity
 const PEER_CONFIG = {
-    debug: 1, // Enable basic debugging
-    // Don't override config - let PeerJS use its own TURN servers for better connectivity
+    debug: 1,
+    config: {
+        iceServers: [
+            // Google's public STUN servers
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            // Metered's free TURN server (allows WiFi to mobile data connections)
+            {
+                urls: 'turn:a.relay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:a.relay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
+        ]
+    }
 };
 
 // Initialize multiplayer UI
@@ -382,11 +399,15 @@ function handleClientMessage(data) {
     }
 }
 
-// Broadcast message to all connected players
+// Broadcast message to all connected players (with error handling)
 function broadcastToAll(data) {
     multiplayerState.connections.forEach(conn => {
-        if (conn.open) {
-            conn.send(data);
+        if (conn && conn.open) {
+            try {
+                conn.send(data);
+            } catch (err) {
+                console.error('Error broadcasting to peer:', err);
+            }
         }
     });
 }
@@ -482,6 +503,9 @@ function startOnlineGame() {
     hideAllScreens();
     document.getElementById('game-screen').style.display = 'block';
     updateUI();
+    
+    // Start monitoring connection quality
+    startConnectionMonitoring();
 }
 
 // Start multiplayer game for clients
@@ -493,6 +517,9 @@ function startMultiplayerGame(serializedState) {
     hideAllScreens();
     document.getElementById('game-screen').style.display = 'block';
     updateUI();
+    
+    // Start monitoring connection quality
+    startConnectionMonitoring();
 }
 
 // Initialize multiplayer game
@@ -536,50 +563,82 @@ function initializeMultiplayerGame(players) {
 // Handle game actions from network
 function handleGameAction(action) {
     if (action.type === 'place-chip') {
+        // Temporarily prevent broadcasting during remote updates
+        const wasMultiplayer = gameState.multiplayerMode;
+        gameState.multiplayerMode = false;
         placeChip(action.row, action.col, action.color);
+        gameState.multiplayerMode = wasMultiplayer;
     } else if (action.type === 'remove-chip') {
+        const wasMultiplayer = gameState.multiplayerMode;
+        gameState.multiplayerMode = false;
         removeChip(action.row, action.col);
+        gameState.multiplayerMode = wasMultiplayer;
     } else if (action.type === 'next-turn') {
         gameState.currentPlayerIndex = action.playerIndex;
-        gameState.players[action.updatedPlayer.id].hand = action.updatedPlayer.hand;
+        // Only update the specific player's hand
+        if (action.updatedPlayer && gameState.players[action.updatedPlayer.id]) {
+            gameState.players[action.updatedPlayer.id].hand = action.updatedPlayer.hand;
+        }
+        updateUI();
+    } else if (action.type === 'update-sequences') {
+        // Update sequence counts without recalculating
+        gameState.sequenceCounts = action.sequenceCounts;
+        renderBoard();
         updateUI();
     }
 }
 
-// Send game action to network
+// Send game action to network (optimized, non-blocking)
 function sendGameAction(action) {
     if (!multiplayerState.isOnline) return;
     
-    const message = {
-        type: 'game-action',
-        action: action
-    };
-    
-    if (multiplayerState.isHost) {
-        broadcastToAll(message);
-    } else {
-        multiplayerState.connections[0].send(message);
-    }
+    // Use setTimeout to make it non-blocking
+    setTimeout(() => {
+        const message = {
+            type: 'game-action',
+            action: action,
+            timestamp: Date.now()
+        };
+        
+        try {
+            if (multiplayerState.isHost) {
+                broadcastToAll(message);
+            } else {
+                if (multiplayerState.connections[0] && multiplayerState.connections[0].open) {
+                    multiplayerState.connections[0].send(message);
+                }
+            }
+        } catch (err) {
+            console.error('Error sending game action:', err);
+        }
+    }, 0);
 }
 
-// Serialize game state for network
+// Serialize game state for network (optimized - only essential data)
 function serializeGameState() {
     return {
         players: gameState.players.map(p => ({
             id: p.id,
             name: p.name,
-            hand: p.hand,
+            hand: p.hand, // Only send hands at game start
             teamIndex: gameState.teams.findIndex(t => t === p.team)
         })),
         currentPlayerIndex: gameState.currentPlayerIndex,
-        board: gameState.board,
-        deck: gameState.deck,
+        // Compress board - only send occupied cells
+        board: gameState.board.map(row => 
+            row.map(cell => ({
+                chip: cell.chip,
+                inSequence: cell.inSequence
+            }))
+        ),
         sequenceCounts: gameState.sequenceCounts,
-        numTeams: gameState.numTeams
+        numTeams: gameState.numTeams,
+        // Don't send full deck - too much data
+        deckCount: gameState.deck.length
     };
 }
 
-// Deserialize game state from network
+// Deserialize game state from network (handle compressed data)
 function deserializeGameState(serializedState) {
     // Recreate teams
     gameState.teams = [];
@@ -606,11 +665,21 @@ function deserializeGameState(serializedState) {
     });
     
     gameState.currentPlayerIndex = serializedState.currentPlayerIndex;
-    gameState.board = serializedState.board;
-    gameState.deck = serializedState.deck;
     gameState.sequenceCounts = serializedState.sequenceCounts;
     gameState.numTeams = serializedState.numTeams;
     gameState.gameStarted = true;
+    
+    // Restore board state (merge with existing board structure)
+    if (serializedState.board) {
+        for (let row = 0; row < 10; row++) {
+            for (let col = 0; col < 10; col++) {
+                if (serializedState.board[row] && serializedState.board[row][col]) {
+                    gameState.board[row][col].chip = serializedState.board[row][col].chip;
+                    gameState.board[row][col].inSequence = serializedState.board[row][col].inSequence;
+                }
+            }
+        }
+    }
     
     renderBoard();
 }
@@ -691,6 +760,68 @@ function generateGameId() {
 function isMyTurn() {
     if (!multiplayerState.isOnline) return true;
     return gameState.currentPlayerIndex === multiplayerState.myPlayerId;
+}
+
+// Monitor connection quality
+function monitorConnectionQuality() {
+    if (!multiplayerState.isOnline || !gameState.gameStarted) return;
+    
+    const connections = multiplayerState.isHost ? 
+        multiplayerState.connections : 
+        [multiplayerState.connections[0]];
+    
+    connections.forEach(conn => {
+        if (conn && conn.peerConnection) {
+            conn.peerConnection.getStats(null).then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                        const rtt = report.currentRoundTripTime;
+                        if (rtt) {
+                            updateConnectionQuality(rtt * 1000); // Convert to ms
+                        }
+                    }
+                });
+            }).catch(err => {
+                console.log('Could not get connection stats:', err);
+            });
+        }
+    });
+}
+
+// Update connection quality indicator
+function updateConnectionQuality(latency) {
+    const statusDiv = document.getElementById('connection-status');
+    if (!statusDiv || !gameState.gameStarted) return;
+    
+    let quality = 'Good';
+    let color = 'connected';
+    
+    if (latency > 500) {
+        quality = 'Poor';
+        color = 'disconnected';
+    } else if (latency > 200) {
+        quality = 'Fair';
+        color = 'connecting';
+    }
+    
+    statusDiv.className = `connection-status ${color}`;
+    statusDiv.innerHTML = `
+        <span class="status-dot"></span>
+        <span>Connection: ${quality} (${Math.round(latency)}ms)</span>
+    `;
+}
+
+// Start monitoring connection during game
+function startConnectionMonitoring() {
+    if (multiplayerState.isOnline && gameState.gameStarted) {
+        showConnectionStatus('Monitoring...', 'connected');
+        // Check every 5 seconds
+        setInterval(() => {
+            if (gameState.gameStarted && multiplayerState.isOnline) {
+                monitorConnectionQuality();
+            }
+        }, 5000);
+    }
 }
 
 // Connection status indicator
