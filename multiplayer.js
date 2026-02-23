@@ -591,15 +591,18 @@ function handleGameAction(action) {
         removeChip(action.row, action.col);
         gameState.multiplayerMode = wasMultiplayer;
     } else if (action.type === 'next-turn') {
+        console.log('[Client] Received next-turn action');
         gameState.currentPlayerIndex = action.playerIndex;
         // Only update the specific player's hand
         if (action.updatedPlayer && gameState.players[action.updatedPlayer.id]) {
-            gameState.players[action.updatedPlayer.id].hand = action.updatedPlayer.hand;
-        }
-        // If it's now my turn and a card was drawn, add it to my hand
-        if (action.drawnCard && action.updatedPlayer.id === multiplayerState.myPlayerId) {
-            // Card already updated in hand above, just log for debugging
-            console.log('[Client] Received updated hand with drawn card:', action.drawnCard);
+            const player = gameState.players[action.updatedPlayer.id];
+            console.log('[Client] Updating player', action.updatedPlayer.id, 'hand from', player.hand.length, 'to', action.updatedPlayer.hand.length, 'cards');
+            player.hand = action.updatedPlayer.hand;
+            
+            // If this is my hand, log it
+            if (action.updatedPlayer.id === multiplayerState.myPlayerId) {
+                console.log('[Client] My hand updated. New size:', player.hand.length);
+            }
         }
         updateUI();
     } else if (action.type === 'update-sequences') {
@@ -610,8 +613,24 @@ function handleGameAction(action) {
     } else if (action.type === 'client-turn-complete') {
         // HOST ONLY: Handle client finishing their turn
         if (multiplayerState.isHost) {
-            console.log('[Host] Client finished turn, drawing card for player', action.playerId);
+            console.log('[Host] Client finished turn, processing for player', action.playerId);
             const player = gameState.players[action.playerId];
+            
+            console.log('[Host] Player hand before:', player.hand.length, 'cards');
+            
+            // Find and remove the played card from player's hand
+            if (action.playedCard) {
+                const cardIndex = player.hand.findIndex(card => 
+                    card.rank === action.playedCard.rank && 
+                    card.suit === action.playedCard.suit
+                );
+                if (cardIndex > -1) {
+                    player.hand.splice(cardIndex, 1);
+                    console.log('[Host] Removed played card:', action.playedCard);
+                }
+            }
+            
+            console.log('[Host] Player hand after removal:', player.hand.length, 'cards');
             
             // Draw new card for the player
             let drawnCard = null;
@@ -620,6 +639,8 @@ function handleGameAction(action) {
                 player.hand.push(drawnCard);
                 console.log('[Host] Drew card for player:', drawnCard);
             }
+            
+            console.log('[Host] Final player hand size:', player.hand.length, 'cards');
             
             // Check win condition
             const wasMultiplayer = gameState.multiplayerMode;

@@ -373,23 +373,24 @@ function finishTurn() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     const playedCard = gameState.selectedCard;
     
-    // Remove played card from hand
-    const cardIndex = currentPlayer.hand.indexOf(gameState.selectedCard);
-    if (cardIndex > -1) {
-        currentPlayer.hand.splice(cardIndex, 1);
-    }
-    
     gameState.selectedCard = null;
     
     // In multiplayer mode
     if (gameState.multiplayerMode && typeof multiplayerState !== 'undefined') {
         if (multiplayerState.isHost) {
-            // HOST: Draw card and broadcast turn change
+            // HOST: Remove card, draw new card, and broadcast turn change
+            const cardIndex = currentPlayer.hand.indexOf(playedCard);
+            if (cardIndex > -1) {
+                currentPlayer.hand.splice(cardIndex, 1);
+            }
+            
             let drawnCard = null;
             if (gameState.deck.length > 0) {
                 drawnCard = gameState.deck.pop();
                 currentPlayer.hand.push(drawnCard);
             }
+            
+            console.log('[Host] After turn - Player hand size:', currentPlayer.hand.length);
             
             // Check win condition
             if (checkWinCondition()) {
@@ -413,7 +414,8 @@ function finishTurn() {
                 });
             }
         } else {
-            // CLIENT: Request card draw from host
+            // CLIENT: Send played card to host (DO NOT remove locally - wait for host)
+            console.log('[Client] Sending turn complete. Current hand size:', currentPlayer.hand.length);
             if (typeof sendGameAction === 'function') {
                 sendGameAction({
                     type: 'client-turn-complete',
@@ -423,7 +425,12 @@ function finishTurn() {
             }
         }
     } else {
-        // Local game: Normal card draw
+        // Local game: Remove card and draw new one
+        const cardIndex = currentPlayer.hand.indexOf(playedCard);
+        if (cardIndex > -1) {
+            currentPlayer.hand.splice(cardIndex, 1);
+        }
+        
         if (gameState.deck.length > 0) {
             currentPlayer.hand.push(gameState.deck.pop());
         }
