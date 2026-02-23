@@ -15,16 +15,10 @@ let multiplayerState = {
     connectionTimeout: null
 };
 
-// PeerJS configuration with better connectivity
+// PeerJS configuration - use PeerJS Cloud servers (includes TURN)
 const PEER_CONFIG = {
-    debug: 2, // Enable debugging
-    config: {
-        iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' }
-        ]
-    }
+    debug: 1, // Enable basic debugging
+    // Don't override config - let PeerJS use its own TURN servers for better connectivity
 };
 
 // Initialize multiplayer UI
@@ -183,10 +177,10 @@ function joinGameRoom() {
             console.log('Connection timeout');
             cleanupConnection();
             hideConnectionStatus();
-            alert('Connection timeout. The host may be offline or the Game ID is incorrect.');
+            alert('Connection timeout. The host may be offline, the Game ID is incorrect, or you may need to try a different network.');
             showMainMenu();
         }
-    }, 15000); // 15 second timeout
+    }, 30000); // 30 second timeout
     
     // Initialize PeerJS with configuration
     multiplayerState.peer = new Peer(PEER_CONFIG);
@@ -198,19 +192,28 @@ function joinGameRoom() {
         // Connect to host with options
         const conn = multiplayerState.peer.connect(gameId, {
             reliable: true,
-            serialization: 'json'
+            serialization: 'json',
+            metadata: { playerName: joinName }
         });
+        
+        // Log connection state changes for debugging
+        if (conn.peerConnection) {
+            conn.peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE connection state:', conn.peerConnection.iceConnectionState);
+            };
+        }
         
         // Set data channel timeout
         let dataChannelTimeout = setTimeout(() => {
             if (!conn.open) {
-                console.log('Data channel timeout');
+                console.log('Data channel timeout - connection may require TURN relay');
+                console.log('Final connection state:', conn.peerConnection?.iceConnectionState);
                 cleanupConnection();
                 hideConnectionStatus();
-                alert('Failed to establish connection. The host may not be available.');
+                alert('Failed to establish connection. This may be due to network restrictions. Try:\n\n1. Both devices on same WiFi\n2. Use mobile data on both devices\n3. Disable VPN if enabled');
                 showMainMenu();
             }
-        }, 10000); // 10 second timeout for data channel
+        }, 25000); // 25 second timeout for data channel (TURN relay can be slow)
         
         conn.on('open', () => {
             clearTimeout(dataChannelTimeout);
