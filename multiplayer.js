@@ -388,7 +388,9 @@ function handleClientMessage(data) {
         multiplayerState.lobbyPlayers = data.players;
         updateLobbyUI();
     } else if (data.type === 'start-game') {
+        console.log('[Client] Received start-game message, hiding connection status...');
         hideConnectionStatus();
+        console.log('[Client] Starting multiplayer game...');
         startMultiplayerGame(data.gameState);
     } else if (data.type === 'game-action') {
         handleGameAction(data.action);
@@ -510,13 +512,28 @@ function startOnlineGame() {
 
 // Start multiplayer game for clients
 function startMultiplayerGame(serializedState) {
+    console.log('[Client] Starting multiplayer game with state:', serializedState);
+    
     gameState.isMultiplayer = true;
     gameState.multiplayerMode = true;
+    
+    // Initialize board structure first (must happen before deserializing)
+    initializeBoard();
+    
+    // Initialize deck (clients don't need actual deck, just placeholder)
+    gameState.deck = [];
+    gameState.deadCardInHand = false;
+    
+    // Now restore the server's game state
     deserializeGameState(serializedState);
+    
+    console.log('[Client] Game state after deserialization:', gameState);
     
     hideAllScreens();
     document.getElementById('game-screen').style.display = 'block';
     updateUI();
+    
+    console.log('[Client] Game screen should now be visible');
     
     // Start monitoring connection quality
     startConnectionMonitoring();
@@ -640,6 +657,8 @@ function serializeGameState() {
 
 // Deserialize game state from network (handle compressed data)
 function deserializeGameState(serializedState) {
+    console.log('[Deserialize] Starting deserialization:', serializedState);
+    
     // Recreate teams
     gameState.teams = [];
     const teamColors = ['blue', 'green', 'red'];
@@ -670,16 +689,21 @@ function deserializeGameState(serializedState) {
     gameState.gameStarted = true;
     
     // Restore board state (merge with existing board structure)
-    if (serializedState.board) {
+    if (serializedState.board && gameState.board) {
         for (let row = 0; row < 10; row++) {
             for (let col = 0; col < 10; col++) {
                 if (serializedState.board[row] && serializedState.board[row][col]) {
-                    gameState.board[row][col].chip = serializedState.board[row][col].chip;
-                    gameState.board[row][col].inSequence = serializedState.board[row][col].inSequence;
+                    if (gameState.board[row] && gameState.board[row][col]) {
+                        gameState.board[row][col].chip = serializedState.board[row][col].chip;
+                        gameState.board[row][col].inSequence = serializedState.board[row][col].inSequence;
+                    }
                 }
             }
         }
     }
+    
+    console.log('[Deserialize] Deserialization complete. Board:', gameState.board);
+    console.log('[Deserialize] Players:', gameState.players);
     
     renderBoard();
 }
