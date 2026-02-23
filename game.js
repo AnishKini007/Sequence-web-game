@@ -31,7 +31,8 @@ let gameState = {
     sequences: { blue: [], green: [], red: [] },
     sequenceCounts: { blue: 0, green: 0, red: 0 },
     gameStarted: false,
-    numTeams: 2
+    numTeams: 2,
+    multiplayerMode: false
 };
 
 // ===== INITIALIZATION =====
@@ -269,6 +270,12 @@ function handleCellClick(row, col) {
     const cell = gameState.board[row][col];
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     
+    // Check if it's player's turn in multiplayer
+    if (gameState.multiplayerMode && typeof isMyTurn === 'function' && !isMyTurn()) {
+        alert('It\'s not your turn!');
+        return;
+    }
+    
     if (!gameState.selectedCard) {
         alert('Please select a card from your hand first!');
         return;
@@ -310,12 +317,33 @@ function handleCellClick(row, col) {
 
 function placeChip(row, col, color) {
     gameState.board[row][col].chip = color;
+    
+    // Broadcast action in multiplayer
+    if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
+        sendGameAction({
+            type: 'place-chip',
+            row: row,
+            col: col,
+            color: color
+        });
+    }
+    
     checkForSequences();
     renderBoard();
 }
 
 function removeChip(row, col) {
     gameState.board[row][col].chip = null;
+    
+    // Broadcast action in multiplayer
+    if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
+        sendGameAction({
+            type: 'remove-chip',
+            row: row,
+            col: col
+        });
+    }
+    
     renderBoard();
 }
 
@@ -343,6 +371,19 @@ function finishTurn() {
     
     // Next player
     gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+    
+    // Broadcast turn change in multiplayer
+    if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
+        sendGameAction({
+            type: 'next-turn',
+            playerIndex: gameState.currentPlayerIndex,
+            updatedPlayer: {
+                id: currentPlayer.id,
+                hand: currentPlayer.hand
+            }
+        });
+    }
+    
     updateUI();
 }
 
@@ -500,9 +541,36 @@ function renderPlayerHand() {
     const handElement = document.getElementById('player-hand');
     handElement.innerHTML = '';
     
-    currentPlayer.hand.forEach((card, index) => {
-        const cardElement = document.createElement('div');
-        cardElement.className = 'card';
+    // In multiplayer, only show hand if it's your turn or you're the current player
+    if (gameState.multiplayerMode && typeof multiplayerState !== 'undefined') {
+        // Only show your own hand
+        const myPlayer = gameState.players[multiplayerState.myPlayerId];
+        if (!myPlayer) return;
+        
+        // Show message if not your turn
+        if (!isMyTurn()) {
+            handElement.innerHTML = '<p style="text-align: center; padding: 20px; color: #666;">Waiting for other player\'s turn...</p>';
+            return;
+        }
+        
+        // Render your hand
+        myPlayer.hand.forEach((card, index) => {
+            renderCardElement(card, handElement);
+        });
+    } else {
+        // Local game - show current player's hand
+        currentPlayer.hand.forEach((card, index) => {
+            renderCardElement(card, handElement);
+        });
+    }
+    
+    // Highlight selectable board cells
+    highlightSelectableCells();
+}
+
+function renderCardElement(card, container) {
+    const cardElement = document.createElement('div');
+    cardElement.className = 'card';
         
         if (card.rank === 'J') {
             cardElement.classList.add('jack');
@@ -532,11 +600,7 @@ function renderPlayerHand() {
         }
         
         cardElement.addEventListener('click', () => selectCard(card));
-        handElement.appendChild(cardElement);
-    });
-    
-    // Highlight selectable board cells
-    highlightSelectableCells();
+        container.appendChild(cardElement);
 }
 
 function selectCard(card) {
@@ -653,6 +717,12 @@ function getTeamColorHex(color) {
 
 // ===== GAME RESET =====
 function resetGame() {
+    // Handle multiplayer cleanup
+    if (gameState.multiplayerMode && typeof leaveLobby === 'function') {
+        leaveLobby();
+        return;
+    }
+    
     gameState = {
         players: [],
         teams: [],
@@ -663,12 +733,18 @@ function resetGame() {
         sequences: { blue: [], green: [], red: [] },
         sequenceCounts: { blue: 0, green: 0, red: 0 },
         gameStarted: false,
-        numTeams: 2
+        numTeams: 2,
+        multiplayerMode: false
     };
     
-    document.getElementById('setup-screen').style.display = 'flex';
-    document.getElementById('game-screen').style.display = 'none';
-    document.getElementById('win-screen').style.display = 'none';
-    
-    updatePlayerNames();
+    // Check if we're in multiplayer mode
+    if (typeof multiplayerState !== 'undefined' && multiplayerState.isOnline) {
+        leaveLobby();
+    } else {
+        document.getElementById('setup-screen').style.display = 'flex';
+        document.getElementById('game-screen').style.display = 'none';
+        document.getElementById('win-screen').style.display = 'none';
+        
+        updatePlayerNames();
+    }
 }

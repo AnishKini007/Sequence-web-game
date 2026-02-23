@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sequence - Board Game</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -13,10 +14,106 @@
             <p class="tagline">Classic Strategy Board Game</p>
         </header>
 
-        <!-- Game Setup Screen -->
-        <div id="setup-screen">
+        <!-- Main Menu Screen -->
+        <div id="main-menu" style="display: block;">
             <div class="setup-panel">
-                <h2>Game Setup</h2>
+                <h2>Welcome to Sequence!</h2>
+                <div class="menu-buttons">
+                    <button id="local-game-btn" class="btn-primary">Local Game (Pass & Play)</button>
+                    <button id="host-game-btn" class="btn-primary">Host Online Game</button>
+                    <button id="join-game-btn" class="btn-primary">Join Online Game</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Host Game Screen -->
+        <div id="host-screen" style="display: none;">
+            <div class="setup-panel">
+                <h2>Host Online Game</h2>
+                
+                <div class="setup-section">
+                    <label>Your Name:</label>
+                    <input type="text" id="host-name" placeholder="Enter your name" />
+                </div>
+
+                <div class="setup-section">
+                    <label for="host-player-count">Number of Players:</label>
+                    <select id="host-player-count">
+                        <option value="2">2 Players</option>
+                        <option value="3">3 Players</option>
+                        <option value="4">4 Players</option>
+                        <option value="6">6 Players</option>
+                    </select>
+                </div>
+
+                <div class="setup-section">
+                    <label for="host-team-count">Number of Teams:</label>
+                    <select id="host-team-count">
+                        <option value="2">2 Teams</option>
+                        <option value="3">3 Teams</option>
+                    </select>
+                </div>
+
+                <button id="create-room-btn" class="btn-primary">Create Game Room</button>
+                <button id="back-to-menu-btn" class="btn-secondary">Back</button>
+            </div>
+        </div>
+
+        <!-- Join Game Screen -->
+        <div id="join-screen" style="display: none;">
+            <div class="setup-panel">
+                <h2>Join Online Game</h2>
+                
+                <div class="setup-section">
+                    <label>Your Name:</label>
+                    <input type="text" id="join-name" placeholder="Enter your name" />
+                </div>
+
+                <div class="setup-section">
+                    <label>Game ID:</label>
+                    <input type="text" id="game-id-input" placeholder="Enter game ID" />
+                </div>
+
+                <button id="join-room-btn" class="btn-primary">Join Game</button>
+                <button id="back-to-menu-btn2" class="btn-secondary">Back</button>
+            </div>
+        </div>
+
+        <!-- Lobby Screen -->
+        <div id="lobby-screen" style="display: none;">
+            <div class="setup-panel lobby-panel">
+                <h2>Game Lobby</h2>
+                
+                <div class="setup-section">
+                    <div class="share-link-section">
+                        <label>Share this link with friends:</label>
+                        <div class="link-container">
+                            <input type="text" id="share-link" readonly />
+                            <button id="copy-link-btn" class="btn-secondary">Copy</button>
+                        </div>
+                        <p class="hint-text">Or share Game ID: <strong id="game-id-display"></strong></p>
+                    </div>
+                </div>
+
+                <div class="setup-section">
+                    <h3>Players in Lobby (<span id="lobby-count">0</span>/<span id="lobby-max">4</span>):</h3>
+                    <div id="lobby-players" class="lobby-players">
+                        <!-- Players will be listed here -->
+                    </div>
+                </div>
+
+                <div id="host-controls" style="display: none;">
+                    <button id="start-game-btn" class="btn-primary" disabled>Start Game</button>
+                </div>
+                <button id="leave-lobby-btn" class="btn-secondary">Leave Lobby</button>
+                <p class="hint-text" id="waiting-message">Waiting for host to start the game...</p>
+            </div>
+        </div>
+
+        <!-- Game Setup Screen (Local) -->
+        <div id="setup-screen" style="display: none;">
+            <div class="setup-panel">
+                <h2>Local Game Setup</h2>
                 
                 <div class="setup-section">
                     <label for="player-count">Number of Players:</label>
@@ -104,5 +201,6 @@
     </div>
 
     <script src="game.js"></script>
+    <script src="multiplayer.js"></script>
 </body>
 </html>
