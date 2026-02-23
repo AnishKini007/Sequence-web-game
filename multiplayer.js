@@ -11,7 +11,20 @@ let multiplayerState = {
     lobbyPlayers: [],
     maxPlayers: 4,
     numTeams: 2,
-    myPlayerId: null
+    myPlayerId: null,
+    connectionTimeout: null
+};
+
+// PeerJS configuration with better connectivity
+const PEER_CONFIG = {
+    debug: 2, // Enable debugging
+    config: {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+    }
 };
 
 // Initialize multiplayer UI
@@ -88,12 +101,15 @@ function createGameRoom() {
     multiplayerState.isHost = true;
     multiplayerState.isOnline = true;
     
+    // Show loading state
+    showConnectionStatus('Connecting...', 'connecting');
+    
     // Generate unique game ID
     const gameId = generateGameId();
     multiplayerState.gameId = gameId;
     
-    // Initialize PeerJS
-    multiplayerState.peer = new Peer(gameId);
+    // Initialize PeerJS with configuration
+    multiplayerState.peer = new Peer(gameId, PEER_CONFIG);
     
     multiplayerState.peer.on('open', (id) => {
         console.log('Host peer opened with ID:', id);
@@ -108,6 +124,7 @@ function createGameRoom() {
             connected: true
         }];
         
+        showConnectionStatus('Connected', 'connected');
         showLobby();
         updateLobbyUI();
         setupHostConnections();
@@ -115,15 +132,27 @@ function createGameRoom() {
     
     multiplayerState.peer.on('error', (err) => {
         console.error('Peer error:', err);
-        alert('Failed to create game room. Please try again.');
+        hideConnectionStatus();
+        let errorMsg = 'Failed to create game room.';
+        if (err.type === 'unavailable-id') {
+            errorMsg = 'Game ID already in use. Please try again.';
+        } else if (err.type === 'network') {
+            errorMsg = 'Network error. Check your internet connection.';
+        }
+        alert(errorMsg);
         showMainMenu();
+    });
+    
+    multiplayerState.peer.on('disconnected', () => {
+        console.log('Peer disconnected, attempting to reconnect...');
+        multiplayerState.peer.reconnect();
     });
 }
 
 // Join game room
 function joinGameRoom() {
     const joinName = document.getElementById('join-name').value.trim();
-    const gameId = document.getElementById('game-id-input').value.trim();
+    const gameId = document.getElementById('game-id-input').value.trim().toUpperCase();
     
     if (!joinName) {
         alert('Please enter your name!');
@@ -135,22 +164,59 @@ function joinGameRoom() {
         return;
     }
     
+    if (gameId.length !== 6) {
+        alert('Game ID must be 6 characters long!');
+        return;
+    }
+    
     multiplayerState.playerName = joinName;
     multiplayerState.gameId = gameId;
     multiplayerState.isHost = false;
     multiplayerState.isOnline = true;
     
-    // Initialize PeerJS
-    multiplayerState.peer = new Peer();
+    // Show loading state
+    showConnectionStatus('Connecting to host...', 'connecting');
+    
+    // Set connection timeout
+    multiplayerState.connectionTimeout = setTimeout(() => {
+        if (multiplayerState.peer && !multiplayerState.lobbyPlayers.length) {
+            console.log('Connection timeout');
+            cleanupConnection();
+            hideConnectionStatus();
+            alert('Connection timeout. The host may be offline or the Game ID is incorrect.');
+            showMainMenu();
+        }
+    }, 15000); // 15 second timeout
+    
+    // Initialize PeerJS with configuration
+    multiplayerState.peer = new Peer(PEER_CONFIG);
     
     multiplayerState.peer.on('open', (id) => {
         console.log('Client peer opened with ID:', id);
+        showConnectionStatus('Connecting to game...', 'connecting');
         
-        // Connect to host
-        const conn = multiplayerState.peer.connect(gameId);
+        // Connect to host with options
+        const conn = multiplayerState.peer.connect(gameId, {
+            reliable: true,
+            serialization: 'json'
+        });
+        
+        // Set data channel timeout
+        let dataChannelTimeout = setTimeout(() => {
+            if (!conn.open) {
+                console.log('Data channel timeout');
+                cleanupConnection();
+                hideConnectionStatus();
+                alert('Failed to establish connection. The host may not be available.');
+                showMainMenu();
+            }
+        }, 10000); // 10 second timeout for data channel
         
         conn.on('open', () => {
-            console.log('Connected to host');
+            clearTimeout(dataChannelTimeout);
+            clearTimeout(multiplayerState.connectionTimeout);
+            console.log('Connected to host - sending join request');
+            showConnectionStatus('Connected! Joining lobby...', 'connected');
             
             // Send join request
             conn.send({
@@ -161,20 +227,48 @@ function joinGameRoom() {
             
             multiplayerState.connections.push(conn);
             setupClientConnection(conn);
-            showLobby();
         });
         
         conn.on('error', (err) => {
+            clearTimeout(dataChannelTimeout);
+            clearTimeout(multiplayerState.connectionTimeout);
             console.error('Connection error:', err);
-            alert('Failed to connect to game. Check the game ID and try again.');
+            hideConnectionStatus();
+            alert('Failed to connect to game. The host may be offline or the Game ID is incorrect.');
+            cleanupConnection();
             showMainMenu();
+        });
+        
+        conn.on('close', () => {
+            console.log('Connection closed');
+            if (!gameState.gameStarted) {
+                hideConnectionStatus();
+                alert('Connection to host lost.');
+                showMainMenu();
+            }
         });
     });
     
     multiplayerState.peer.on('error', (err) => {
+        clearTimeout(multiplayerState.connectionTimeout);
         console.error('Peer error:', err);
-        alert('Failed to join game. Please try again.');
+        hideConnectionStatus();
+        let errorMsg = 'Failed to join game.';
+        if (err.type === 'peer-unavailable') {
+            errorMsg = 'Game not found. Check the Game ID and make sure the host has created the room.';
+        } else if (err.type === 'network') {
+            errorMsg = 'Network error. Check your internet connection.';
+        } else if (err.type === 'browser-incompatible') {
+            errorMsg = 'Your browser does not support this feature. Try Chrome, Firefox, or Edge.';
+        }
+        alert(errorMsg);
+        cleanupConnection();
         showMainMenu();
+    });
+    
+    multiplayerState.peer.on('disconnected', () => {
+        console.log('Peer disconnected, attempting to reconnect...');
+        multiplayerState.peer.reconnect();
     });
 }
 
@@ -261,21 +355,27 @@ function handleClientMessage(data) {
     console.log('Client received:', data);
     
     if (data.type === 'lobby-state') {
+        clearTimeout(multiplayerState.connectionTimeout);
         multiplayerState.lobbyPlayers = data.players;
         multiplayerState.maxPlayers = data.maxPlayers;
         multiplayerState.numTeams = data.numTeams;
         multiplayerState.gameId = data.gameId;
         multiplayerState.myPlayerId = data.yourId;
+        hideConnectionStatus();
+        showLobby();
         updateLobbyUI();
     } else if (data.type === 'player-joined') {
         multiplayerState.lobbyPlayers = data.players;
         updateLobbyUI();
     } else if (data.type === 'start-game') {
+        hideConnectionStatus();
         startMultiplayerGame(data.gameState);
     } else if (data.type === 'game-action') {
         handleGameAction(data.action);
     } else if (data.type === 'game-state-sync') {
         syncGameState(data.gameState);
+    } else if (data.type === 'error') {
+        alert(data.message || 'An error occurred');
     }
 }
 
@@ -529,9 +629,8 @@ function handlePlayerDisconnect(peerId) {
 
 // Leave lobby
 function leaveLobby() {
-    if (multiplayerState.peer) {
-        multiplayerState.peer.destroy();
-    }
+    cleanupConnection();
+    hideConnectionStatus();
     
     multiplayerState = {
         isOnline: false,
@@ -543,7 +642,8 @@ function leaveLobby() {
         lobbyPlayers: [],
         maxPlayers: 4,
         numTeams: 2,
-        myPlayerId: null
+        myPlayerId: null,
+        connectionTimeout: null
     };
     
     showMainMenu();
@@ -588,6 +688,53 @@ function generateGameId() {
 function isMyTurn() {
     if (!multiplayerState.isOnline) return true;
     return gameState.currentPlayerIndex === multiplayerState.myPlayerId;
+}
+
+// Connection status indicator
+function showConnectionStatus(message, status) {
+    let statusDiv = document.getElementById('connection-status');
+    
+    if (!statusDiv) {
+        statusDiv = document.createElement('div');
+        statusDiv.id = 'connection-status';
+        statusDiv.className = 'connection-status';
+        document.body.appendChild(statusDiv);
+    }
+    
+    statusDiv.className = `connection-status ${status}`;
+    statusDiv.innerHTML = `
+        <span class="status-dot"></span>
+        <span>${message}</span>
+    `;
+    statusDiv.style.display = 'flex';
+}
+
+function hideConnectionStatus() {
+    const statusDiv = document.getElementById('connection-status');
+    if (statusDiv) {
+        statusDiv.style.display = 'none';
+    }
+}
+
+// Cleanup connection
+function cleanupConnection() {
+    if (multiplayerState.connectionTimeout) {
+        clearTimeout(multiplayerState.connectionTimeout);
+        multiplayerState.connectionTimeout = null;
+    }
+    
+    multiplayerState.connections.forEach(conn => {
+        if (conn && conn.open) {
+            conn.close();
+        }
+    });
+    
+    if (multiplayerState.peer) {
+        multiplayerState.peer.destroy();
+        multiplayerState.peer = null;
+    }
+    
+    multiplayerState.connections = [];
 }
 
 // Initialize multiplayer on page load

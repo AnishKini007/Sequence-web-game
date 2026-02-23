@@ -578,6 +578,27 @@ header .tagline {
     border-left: 4px solid #FFA500;
 }
 
+.connection-status .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.connection-status.connected .status-dot {
+    background: #4CAF50;
+    animation: pulse-dot 2s infinite;
+}
+
+.connection-status.connecting .status-dot {
+    background: #FFA500;
+    animation: pulse-dot 1s infinite;
+}
+
+.connection-status.disconnected .status-dot {
+    background: #f44336;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     header h1 {
