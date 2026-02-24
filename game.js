@@ -158,6 +158,18 @@ function getJackType(suit) {
     return (suit === '♠' || suit === '♥') ? 'one-eyed' : 'two-eyed';
 }
 
+// Helper function to ensure a card (especially Jacks) has proper properties
+function normalizeCard(card) {
+    if (!card) return card;
+    
+    // Ensure Jack cards have their type set
+    if (card.rank === 'J' && !card.type) {
+        card.type = getJackType(card.suit);
+    }
+    
+    return card;
+}
+
 function shuffleDeck() {
     for (let i = gameState.deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -281,22 +293,31 @@ function handleCellClick(row, col) {
         return;
     }
     
-    const selectedCard = gameState.selectedCard;
+    // Normalize the selected card to ensure properties are set
+    const selectedCard = normalizeCard(gameState.selectedCard);
+    gameState.selectedCard = selectedCard; // Update with normalized version
     
-    // Ensure Jack has type (safety check)
-    if (selectedCard.rank === 'J' && !selectedCard.type) {
-        selectedCard.type = getJackType(selectedCard.suit);
-        console.log('[handleCellClick] Fixed missing Jack type:', selectedCard.type);
+    console.log('[handleCellClick] === CELL CLICKED ===');
+    console.log('[handleCellClick] Row:', row, 'Col:', col);
+    console.log('[handleCellClick] Selected card:', JSON.stringify(selectedCard));
+    
+    if (selectedCard.rank === 'J') {
+        console.log('[handleCellClick] === JACK DETECTED IN CELL CLICK ===');
+        console.log('[handleCellClick] Suit:', selectedCard.suit);
+        console.log('[handleCellClick] Type:', selectedCard.type);
+        console.log('[handleCellClick] Type check - is one-eyed:', selectedCard.type === 'one-eyed');
+        console.log('[handleCellClick] Type check - is two-eyed:', selectedCard.type === 'two-eyed');
     }
-    
-    console.log('[handleCellClick] Processing click with card:', selectedCard);
     
     // Handle Two-Eyed Jack (wild card)
     if (selectedCard.rank === 'J' && selectedCard.type === 'two-eyed') {
+        console.log('[TwoEyedJack] Two-Eyed Jack detected - wild card mode');
         if (!cell.chip && !cell.isCorner) {
+            console.log('[TwoEyedJack] ✓ Placing chip');
             placeChip(row, col, currentPlayer.team.color);
             finishTurn();
         } else {
+            console.log('[TwoEyedJack] ✗ Space occupied or corner');
             alert('This space is already occupied or is a corner!');
         }
         return;
@@ -304,18 +325,29 @@ function handleCellClick(row, col) {
     
     // Handle One-Eyed Jack (remove opponent chip)
     if (selectedCard.rank === 'J' && selectedCard.type === 'one-eyed') {
-        console.log('[OneEyedJack] Attempting to remove chip at', row, col);
-        console.log('[OneEyedJack] Cell chip:', cell.chip, 'Player team:', currentPlayer.team.color, 'In sequence:', cell.inSequence);
+        console.log('[OneEyedJack] One-Eyed Jack selected!');
+        console.log('[OneEyedJack] Attempting to remove chip at row:', row, 'col:', col);
+        console.log('[OneEyedJack] Cell info:');
+        console.log('  - Has chip:', !!cell.chip);
+        console.log('  - Chip color:', cell.chip);
+        console.log('  - Current player team:', currentPlayer.team.color);
+        console.log('  - Is different team:', cell.chip !== currentPlayer.team.color);
+        console.log('  - In sequence:', cell.inSequence);
+        
         if (cell.chip && cell.chip !== currentPlayer.team.color && !cell.inSequence) {
-            console.log('[OneEyedJack] Removing chip');
+            console.log('[OneEyedJack] ✓ All conditions met - Removing chip!');
             removeChip(row, col);
             finishTurn();
         } else {
+            console.log('[OneEyedJack] ✗ Conditions not met:');
             if (!cell.chip) {
+                console.log('  - No chip present');
                 alert('You must select a space with an opponent\'s chip!');
             } else if (cell.chip === currentPlayer.team.color) {
+                console.log('  - Chip is your own team');
                 alert('You cannot remove your own team\'s chip!');
             } else if (cell.inSequence) {
+                console.log('  - Chip is in a completed sequence');
                 alert('You cannot remove a chip that is part of a completed sequence!');
             }
         }
@@ -323,11 +355,17 @@ function handleCellClick(row, col) {
     }
     
     // Normal card placement
+    console.log('[NormalCard] Attempting normal card placement');
     const cardStr = `${selectedCard.rank}${selectedCard.suit}`;
+    console.log('[NormalCard] Looking for card:', cardStr, 'on board cell:', cell.card);
     if (cell.card === cardStr && !cell.chip) {
+        console.log('[NormalCard] ✓ Valid move - placing chip');
         placeChip(row, col, currentPlayer.team.color);
         finishTurn();
     } else {
+        console.log('[NormalCard] ✗ Invalid move');
+        console.log('[NormalCard] Card match:', cell.card === cardStr);
+        console.log('[NormalCard] Cell empty:', !cell.chip);
         alert('Invalid move! Select a matching empty space on the board.');
     }
 }
@@ -692,20 +730,22 @@ function renderCardElement(card, container) {
 }
 
 function selectCard(card) {
-    // Ensure Jack cards have their type set
-    if (card.rank === 'J' && !card.type) {
-        card.type = getJackType(card.suit);
-        console.log('[SelectCard] Fixed missing Jack type for', card.suit, '- assigned:', card.type);
+    console.log('[SelectCard] Raw card received:', JSON.stringify(card));
+    
+    // Normalize the card to ensure Jack type is set
+    const normalizedCard = normalizeCard({ ...card });
+    
+    console.log('[SelectCard] Normalized card:', JSON.stringify(normalizedCard));
+    
+    if (normalizedCard.rank === 'J') {
+        console.log('[SelectCard] === JACK CARD SELECTED ===');
+        console.log('[SelectCard] Suit:', normalizedCard.suit);
+        console.log('[SelectCard] Type:', normalizedCard.type);
+        console.log('[SelectCard] Expected type:', getJackType(normalizedCard.suit));
     }
     
-    console.log('[SelectCard] Selected card:', card);
-    if (card.rank === 'J') {
-        console.log('[SelectCard] Jack suit:', card.suit, 'Type:', card.type);
-        console.log('[SelectCard] Expected type for suit:', getJackType(card.suit));
-    }
-    
-    // Store a copy of the card to avoid reference issues
-    gameState.selectedCard = { ...card };
+    // Store the normalized card
+    gameState.selectedCard = normalizedCard;
     renderPlayerHand();
 }
 
