@@ -620,6 +620,12 @@ function handleGameAction(action) {
         gameState.sequenceCounts = action.sequenceCounts;
         renderBoard();
         updateUI();
+    } else if (action.type === 'game-end') {
+        // Show game over screen
+        console.log('[Client] Game ended - Winner:', action.winnerTeamName);
+        document.getElementById('winner-text').textContent = `Team ${action.winnerTeamName} Wins!`;
+        document.getElementById('game-screen').style.display = 'none';
+        document.getElementById('win-screen').style.display = 'flex';
     } else if (action.type === 'client-turn-complete') {
         // HOST ONLY: Handle client finishing their turn
         if (multiplayerState.isHost) {

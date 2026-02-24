@@ -577,13 +577,13 @@ function isSequence(startRow, startCol, rowDir, colDir, color, length) {
         
         const cell = gameState.board[row][col];
         
-        // Corners count for all colors
+        // FREE corners count for all colors (4 chips + 1 corner = valid sequence)
         if (cell.isCorner) {
             count++;
         } else if (cell.chip === color) {
             count++;
         } else {
-            return false;
+            return false; // Empty cell or opponent chip breaks the sequence
         }
     }
     
@@ -623,6 +623,17 @@ function endGame() {
     }
     
     if (winner) {
+        console.log('[EndGame] Game Over - Winner:', winner.name);
+        
+        // Broadcast game end in multiplayer
+        if (gameState.multiplayerMode && typeof sendGameAction === 'function') {
+            sendGameAction({
+                type: 'game-end',
+                winnerTeamColor: winner.color,
+                winnerTeamName: winner.name
+            });
+        }
+        
         document.getElementById('winner-text').textContent = `Team ${winner.name} Wins!`;
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('win-screen').style.display = 'flex';
