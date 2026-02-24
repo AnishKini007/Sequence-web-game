@@ -765,6 +765,7 @@ function selectCard(card) {
     // Store the normalized card
     gameState.selectedCard = normalizedCard;
     renderPlayerHand();
+    updateDeadCardButton(); // Enable button if selected card is dead
 }
 
 function isDeadCard(card) {
