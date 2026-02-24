@@ -626,6 +626,54 @@ function handleGameAction(action) {
         document.getElementById('winner-text').textContent = `Team ${action.winnerTeamName} Wins!`;
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('win-screen').style.display = 'flex';
+    } else if (action.type === 'exchange-dead-card') {
+        // Client receives dead card exchange from host
+        console.log('[Client] Dead card exchanged for player', action.playerId);
+        if (gameState.players[action.playerId]) {
+            gameState.players[action.playerId].hand = action.updatedHand;
+        }
+        updateUI();
+    } else if (action.type === 'client-exchange-dead-card') {
+        // HOST ONLY: Handle client dead card exchange request
+        if (multiplayerState.isHost) {
+            console.log('[Host] Client requesting dead card exchange for player', action.playerId);
+            const player = gameState.players[action.playerId];
+            
+            if (!player) return;
+            
+            // Find and remove the dead card from player's hand
+            if (action.deadCard) {
+                const deadCardIndex = player.hand.findIndex(card => 
+                    card.rank === action.deadCard.rank && 
+                    card.suit === action.deadCard.suit
+                );
+                
+                if (deadCardIndex > -1 && gameState.deck.length > 0) {
+                    const removedCard = player.hand.splice(deadCardIndex, 1)[0];
+                    const newCard = gameState.deck.pop();
+                    player.hand.push(newCard);
+                    
+                    console.log('[Host] Exchanged dead card for player:', removedCard, 'for', newCard);
+                    
+                    // Broadcast exchange to all clients
+                    broadcastToAll({
+                        type: 'game-action',
+                        action: {
+                            type: 'exchange-dead-card',
+                            playerId: action.playerId,
+                            removedCard: removedCard,
+                            newCard: newCard,
+                            updatedHand: player.hand
+                        }
+                    });
+                    
+                    // Update host UI
+                    updateUI();
+                } else {
+                    console.warn('[Host] Could not exchange dead card - card not found or deck empty');
+                }
+            }
+        }
     } else if (action.type === 'client-turn-complete') {
         // HOST ONLY: Handle client finishing their turn
         if (multiplayerState.isHost) {

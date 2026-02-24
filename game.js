@@ -794,20 +794,101 @@ function updateDeadCardButton() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
     const deadCardBtn = document.getElementById('dead-card-btn');
     
-    const hasDeadCard = currentPlayer.hand.some(card => isDeadCard(card));
+    // Enable button if there's a selected card that is dead
+    const hasDeadCard = gameState.selectedCard && isDeadCard(gameState.selectedCard);
     deadCardBtn.disabled = !hasDeadCard;
+    
+    if (hasDeadCard) {
+        deadCardBtn.textContent = 'Exchange Selected Dead Card';
+    } else {
+        deadCardBtn.textContent = 'Exchange Dead Card';
+    }
     
     deadCardBtn.onclick = () => exchangeDeadCard();
 }
 
 function exchangeDeadCard() {
     const currentPlayer = gameState.players[gameState.currentPlayerIndex];
-    const deadCardIndex = currentPlayer.hand.findIndex(card => isDeadCard(card));
     
-    if (deadCardIndex !== -1 && gameState.deck.length > 0) {
-        currentPlayer.hand.splice(deadCardIndex, 1);
-        currentPlayer.hand.push(gameState.deck.pop());
-        updateUI();
+    // Check if it's player's turn in multiplayer
+    if (gameState.multiplayerMode && typeof isMyTurn === 'function' && !isMyTurn()) {
+        alert('It\'s not your turn!');
+        return;
+    }
+    
+    // Must have a selected card that is dead
+    if (!gameState.selectedCard) {
+        alert('Please select a dead card from your hand first!');
+        return;
+    }
+    
+    if (!isDeadCard(gameState.selectedCard)) {
+        alert('The selected card is not dead!');
+        return;
+    }
+    
+    console.log('[ExchangeDeadCard] Exchanging dead card:', gameState.selectedCard);
+    
+    // In multiplayer mode
+    if (gameState.multiplayerMode && typeof multiplayerState !== 'undefined') {
+        if (multiplayerState.isHost) {
+            // HOST: Remove dead card and draw new one
+            const deadCardIndex = currentPlayer.hand.findIndex(c => 
+                c.rank === gameState.selectedCard.rank && 
+                c.suit === gameState.selectedCard.suit
+            );
+            
+            if (deadCardIndex !== -1 && gameState.deck.length > 0) {
+                const removedCard = currentPlayer.hand.splice(deadCardIndex, 1)[0];
+                const newCard = gameState.deck.pop();
+                currentPlayer.hand.push(newCard);
+                
+                console.log('[Host] Exchanged dead card:', removedCard, 'for', newCard);
+                
+                // Broadcast dead card exchange
+                if (typeof sendGameAction === 'function') {
+                    sendGameAction({
+                        type: 'exchange-dead-card',
+                        playerId: currentPlayer.id,
+                        removedCard: removedCard,
+                        newCard: newCard,
+                        updatedHand: currentPlayer.hand
+                    });
+                }
+                
+                gameState.selectedCard = null;
+                updateUI();
+            } else {
+                alert('No cards left in deck to exchange!');
+            }
+        } else {
+            // CLIENT: Request exchange from host
+            console.log('[Client] Requesting dead card exchange');
+            if (typeof sendGameAction === 'function') {
+                sendGameAction({
+                    type: 'client-exchange-dead-card',
+                    playerId: currentPlayer.id,
+                    deadCard: gameState.selectedCard
+                });
+            }
+            gameState.selectedCard = null;
+            updateUI();
+        }
+    } else {
+        // Local game: Simple exchange
+        const deadCardIndex = currentPlayer.hand.findIndex(c => 
+            c.rank === gameState.selectedCard.rank && 
+            c.suit === gameState.selectedCard.suit
+        );
+        
+        if (deadCardIndex !== -1 && gameState.deck.length > 0) {
+            currentPlayer.hand.splice(deadCardIndex, 1);
+            currentPlayer.hand.push(gameState.deck.pop());
+            gameState.selectedCard = null;
+            updateUI();
+        } else {
+            alert('No cards left in deck to exchange!');
+        }
     }
 }
 
