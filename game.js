@@ -566,6 +566,7 @@ function checkForSequences() {
 
 function isSequence(startRow, startCol, rowDir, colDir, color, length) {
     let count = 0;
+    let hasExistingSequence = false;
     
     for (let i = 0; i < length; i++) {
         const row = startRow + (i * rowDir);
@@ -577,6 +578,12 @@ function isSequence(startRow, startCol, rowDir, colDir, color, length) {
         
         const cell = gameState.board[row][col];
         
+        // Skip if any cell is already part of an existing sequence
+        // This prevents counting overlapping sequences multiple times
+        if (cell.inSequence && !cell.isCorner) {
+            hasExistingSequence = true;
+        }
+        
         // FREE corners count for all colors (4 chips + 1 corner = valid sequence)
         if (cell.isCorner) {
             count++;
@@ -587,7 +594,8 @@ function isSequence(startRow, startCol, rowDir, colDir, color, length) {
         }
     }
     
-    return count === length;
+    // Only count this as a new sequence if no cells are already in a sequence
+    return count === length && !hasExistingSequence;
 }
 
 function markSequence(startRow, startCol, rowDir, colDir, length) {
