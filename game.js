@@ -249,17 +249,16 @@ function renderBoard() {
                 cellElement.appendChild(rankSpan);
                 cellElement.appendChild(suitSpan);
                 
-                if (!cell.chip) {
-                    cellElement.addEventListener('click', () => handleCellClick(row, col));
+                // Add chip if present
+                if (cell.chip) {
+                    const chip = document.createElement('div');
+                    chip.className = `chip ${cell.chip}`;
+                    cellElement.appendChild(chip);
+                    cellElement.classList.add('occupied');
                 }
-            }
-            
-            // Add chip if present
-            if (cell.chip) {
-                const chip = document.createElement('div');
-                chip.className = `chip ${cell.chip}`;
-                cellElement.appendChild(chip);
-                cellElement.classList.add('occupied');
+                
+                // Add click listener to all non-corner cells
+                cellElement.addEventListener('click', () => handleCellClick(row, col));
             }
             
             // Highlight if in sequence
