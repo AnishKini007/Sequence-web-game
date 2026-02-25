@@ -15,6 +15,35 @@ let multiplayerState = {
     connectionTimeout: null
 };
 
+// Detect iOS devices (iPhone, iPad)
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+// Get platform-specific troubleshooting message
+function getConnectionErrorMessage() {
+    const baseMsg = 'Failed to establish connection. Please try:\n\n';
+    
+    if (isIOS()) {
+        return baseMsg + 
+            '📱 iOS-SPECIFIC FIXES:\n\n' +
+            '1. DISABLE iCloud Private Relay (Settings → Apple ID → iCloud → Private Relay → OFF)\n' +
+            '2. Try using WiFi instead of cellular data\n' +
+            '3. Keep Safari in foreground - don\'t switch apps\n' +
+            '4. Verify Game ID is correct\n' +
+            '5. Ask host to restart the game room\n\n' +
+            '⚠️ iOS Safari has stricter WebRTC restrictions. Private Relay and cellular data often block connections.';
+    } else {
+        return baseMsg +
+            '1. Verify the Game ID is correct\n' +
+            '2. Ensure both devices have stable internet\n' +
+            '3. Ask the host to restart the game room\n' +
+            '4. Try connecting from a different network\n\n' +
+            'Note: Some corporate/school networks may block peer connections.';
+    }
+}
+
 // PeerJS configuration - use multiple free TURN servers for better cross-network connectivity
 const PEER_CONFIG = {
     debug: 1,
@@ -70,8 +99,40 @@ function initializeMultiplayerUI() {
     document.getElementById('leave-lobby-btn').addEventListener('click', leaveLobby);
     document.getElementById('copy-link-btn').addEventListener('click', copyShareLink);
     
+    // Add iOS-specific warning if on iOS
+    if (isIOS()) {
+        addIOSWarningToJoinScreen();
+    }
+    
     // Check if joining from a link
     checkForGameIdInUrl();
+}
+
+// Add iOS-specific warning to join screen
+function addIOSWarningToJoinScreen() {
+    const joinScreen = document.getElementById('join-screen');
+    const existingWarnings = joinScreen.querySelectorAll('.setup-section');
+    const lastWarning = existingWarnings[existingWarnings.length - 1];
+    
+    const iosWarning = document.createElement('div');
+    iosWarning.className = 'setup-section';
+    iosWarning.style.cssText = 'margin-top: 15px; padding: 15px; background: #ff9800; border-radius: 8px; color: white;';
+    iosWarning.innerHTML = `
+        <p style="margin: 0 0 8px 0; font-size: 0.95rem; font-weight: bold;">
+            📱 iOS DEVICE DETECTED
+        </p>
+        <p style="margin: 0 0 8px 0; font-size: 0.85rem;">
+            <strong>Before connecting, disable iCloud Private Relay:</strong>
+        </p>
+        <p style="margin: 0; padding-left: 15px; font-size: 0.8rem; line-height: 1.4;">
+            Settings → [Your Name] → iCloud → Private Relay → Turn OFF
+        </p>
+        <p style="margin: 8px 0 0 0; font-size: 0.8rem; line-height: 1.4;">
+            Also recommended: Use WiFi instead of cellular data for best results.
+        </p>
+    `;
+    
+    lastWarning.parentNode.insertBefore(iosWarning, lastWarning.nextSibling);
 }
 
 // Screen navigation
@@ -206,7 +267,7 @@ function joinGameRoom() {
             console.log('Connection timeout');
             cleanupConnection();
             hideConnectionStatus();
-            alert('Connection timeout. Please verify:\n\n1. The Game ID is correct\n2. The host is online and waiting in lobby\n3. Both devices have internet access\n\nIf problems persist, try having both players use the same network type (both WiFi or both mobile data).');
+            alert(getConnectionErrorMessage());
             showMainMenu();
         }
     }, 45000); // 45 second timeout for initial connection
@@ -239,7 +300,7 @@ function joinGameRoom() {
                 console.log('Final connection state:', conn.peerConnection?.iceConnectionState);
                 cleanupConnection();
                 hideConnectionStatus();
-                alert('Failed to establish connection. Please try:\n\n1. Verify the Game ID is correct\n2. Ensure both devices have stable internet\n3. Ask the host to restart the game room\n4. Try connecting from a different network\n\nNote: Some corporate/school networks may block peer connections.');
+                alert(getConnectionErrorMessage());
                 showMainMenu();
             }
         }, 40000); // 40 second timeout for data channel (TURN relay needs more time)
