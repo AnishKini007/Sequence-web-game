@@ -15,7 +15,7 @@ let multiplayerState = {
     connectionTimeout: null
 };
 
-// PeerJS configuration - use free public TURN servers for better cross-network connectivity
+// PeerJS configuration - use multiple free TURN servers for better cross-network connectivity
 const PEER_CONFIG = {
     debug: 1,
     config: {
@@ -23,18 +23,30 @@ const PEER_CONFIG = {
             // Google's public STUN servers
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            // Metered's free TURN server (allows WiFi to mobile data connections)
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            // OpenRelay free TURN servers
             {
-                urls: 'turn:a.relay.metered.ca:80',
+                urls: 'turn:openrelay.metered.ca:80',
                 username: 'openrelayproject',
                 credential: 'openrelayproject'
             },
             {
-                urls: 'turn:a.relay.metered.ca:443',
+                urls: 'turn:openrelay.metered.ca:443',
                 username: 'openrelayproject',
                 credential: 'openrelayproject'
-            }
-        ]
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            // Twillio's public STUN servers
+            { urls: 'stun:global.stun.twilio.com:3478' }
+        ],
+        iceTransportPolicy: 'all', // Try all methods (STUN direct + TURN relay)
+        iceCandidatePoolSize: 10 // Pre-gather ICE candidates for faster connection
     }
 };
 
@@ -194,10 +206,10 @@ function joinGameRoom() {
             console.log('Connection timeout');
             cleanupConnection();
             hideConnectionStatus();
-            alert('Connection timeout. The host may be offline, the Game ID is incorrect, or you may need to try a different network.');
+            alert('Connection timeout. Please verify:\n\n1. The Game ID is correct\n2. The host is online and waiting in lobby\n3. Both devices have internet access\n\nIf problems persist, try having both players use the same network type (both WiFi or both mobile data).');
             showMainMenu();
         }
-    }, 30000); // 30 second timeout
+    }, 45000); // 45 second timeout for initial connection
     
     // Initialize PeerJS with configuration
     multiplayerState.peer = new Peer(PEER_CONFIG);
@@ -223,14 +235,14 @@ function joinGameRoom() {
         // Set data channel timeout
         let dataChannelTimeout = setTimeout(() => {
             if (!conn.open) {
-                console.log('Data channel timeout - connection may require TURN relay');
+                console.log('Data channel timeout - connection failed');
                 console.log('Final connection state:', conn.peerConnection?.iceConnectionState);
                 cleanupConnection();
                 hideConnectionStatus();
-                alert('Failed to establish connection. This may be due to network restrictions. Try:\n\n1. Both devices on same WiFi\n2. Use mobile data on both devices\n3. Disable VPN if enabled');
+                alert('Failed to establish connection. Please try:\n\n1. Verify the Game ID is correct\n2. Ensure both devices have stable internet\n3. Ask the host to restart the game room\n4. Try connecting from a different network\n\nNote: Some corporate/school networks may block peer connections.');
                 showMainMenu();
             }
-        }, 25000); // 25 second timeout for data channel (TURN relay can be slow)
+        }, 40000); // 40 second timeout for data channel (TURN relay needs more time)
         
         conn.on('open', () => {
             clearTimeout(dataChannelTimeout);
