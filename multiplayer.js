@@ -178,9 +178,31 @@ function attemptRestoreAndReconnect(savedState) {
     multiplayerState.isOnline = true;
     
     if (savedState.multiplayerState.isHost) {
-        // Recreate host
+        // Recreate host peer with same game ID
         multiplayerState.peer = new Peer(savedState.multiplayerState.gameId, PEER_CONFIG);
-        setupHostCallbacks();
+        
+        multiplayerState.peer.on('open', (id) => {
+            console.log('[Reconnect] Host peer reopened with ID:', id);
+            showConnectionStatus('Reconnected as host', 'connected');
+            setupHostConnections();
+            handleReconnectionSuccess();
+            startAutoSave();
+        });
+        
+        multiplayerState.peer.on('error', (err) => {
+            console.error('[Reconnect] Host peer error:', err);
+            hideConnectionStatus();
+            alert('Failed to reconnect as host. The game ID may be in use.');
+            showMainMenu();
+        });
+        
+        multiplayerState.peer.on('disconnected', () => {
+            console.log('[Host] Peer disconnected');
+            if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+                saveGameState();
+                attemptReconnection();
+            }
+        });
     } else {
         // Rejoin as client
         multiplayerState.peer = new Peer(PEER_CONFIG);
@@ -193,6 +215,14 @@ function attemptRestoreAndReconnect(savedState) {
             
             conn.on('open', () => {
                 console.log('[Reconnect] Successfully reconnected to game');
+                
+                // Send join request to reclaim slot
+                conn.send({
+                    type: 'join',
+                    playerName: savedState.multiplayerState.playerName,
+                    peerId: id
+                });
+                
                 multiplayerState.connections.push(conn);
                 setupClientConnection(conn);
                 handleReconnectionSuccess();
@@ -205,6 +235,21 @@ function attemptRestoreAndReconnect(savedState) {
                 alert('Failed to reconnect to the game. The host may be offline.');
                 showMainMenu();
             });
+        });
+        
+        multiplayerState.peer.on('error', (err) => {
+            console.error('[Reconnect] Client peer error:', err);
+            hideConnectionStatus();
+            alert('Failed to reconnect to the game.');
+            showMainMenu();
+        });
+        
+        multiplayerState.peer.on('disconnected', () => {
+            console.log('[Client] Peer disconnected');
+            if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+                saveGameState();
+                attemptReconnection();
+            }
         });
     }
 }
@@ -489,23 +534,42 @@ function handleHostMessage(conn, data) {
             existingPlayer.connected = true;
             existingPlayer.peerId = data.peerId; // Update peerId in case it changed
             
-            // Send lobby state to reconnecting player
-            conn.send({
-                type: 'lobby-state',
-                players: multiplayerState.lobbyPlayers,
-                maxPlayers: multiplayerState.maxPlayers,
-                numTeams: multiplayerState.numTeams,
-                gameId: multiplayerState.gameId,
-                yourId: existingPlayer.id,
-                isReconnect: true
-            });
-            
-            // Broadcast player reconnection to all players
-            broadcastToAll({
-                type: 'player-reconnected',
-                player: existingPlayer,
-                players: multiplayerState.lobbyPlayers
-            });
+            // Check if game has already started
+            if (gameState.gameStarted) {
+                // Send full game state to reconnecting player
+                console.log('[Reconnect] Sending active game state to reconnecting player');
+                conn.send({
+                    type: 'start-game',
+                    gameState: serializeGameState(),
+                    isReconnect: true,
+                    yourId: existingPlayer.id
+                });
+                
+                // Broadcast player reconnection to all players
+                broadcastToAll({
+                    type: 'player-reconnected',
+                    player: existingPlayer,
+                    players: multiplayerState.lobbyPlayers
+                });
+            } else {
+                // Game hasn't started yet, send lobby state
+                conn.send({
+                    type: 'lobby-state',
+                    players: multiplayerState.lobbyPlayers,
+                    maxPlayers: multiplayerState.maxPlayers,
+                    numTeams: multiplayerState.numTeams,
+                    gameId: multiplayerState.gameId,
+                    yourId: existingPlayer.id,
+                    isReconnect: true
+                });
+                
+                // Broadcast player reconnection to all players
+                broadcastToAll({
+                    type: 'player-reconnected',
+                    player: existingPlayer,
+                    players: multiplayerState.lobbyPlayers
+                });
+            }
             
             return;
         }
@@ -601,17 +665,39 @@ function handleClientMessage(data) {
         updateLobbyUI();
     } else if (data.type === 'player-reconnected') {
         multiplayerState.lobbyPlayers = data.players;
-        updateLobbyUI();
-        showNotification(`${data.player.name} reconnected`, 'success');
+        if (gameState.gameStarted) {
+            // Game is active, just show notification
+            showNotification(`${data.player.name} reconnected`, 'success');
+        } else {
+            // Still in lobby, update UI
+            updateLobbyUI();
+            showNotification(`${data.player.name} reconnected`, 'success');
+        }
     } else if (data.type === 'player-disconnected') {
         multiplayerState.lobbyPlayers = data.players;
-        updateLobbyUI();
-        showNotification(`${data.playerName} disconnected`, 'warning');
+        if (gameState.gameStarted) {
+            // Game is active, just show notification
+            showNotification(`${data.playerName} disconnected`, 'warning');
+        } else {
+            // Still in lobby, update UI
+            updateLobbyUI();
+            showNotification(`${data.playerName} disconnected`, 'warning');
+        }
     } else if (data.type === 'start-game') {
         console.log('[Client] Received start-game message, hiding connection status...');
         hideConnectionStatus();
-        console.log('[Client] Starting multiplayer game...');
-        startMultiplayerGame(data.gameState);
+        
+        if (data.isReconnect) {
+            // Reconnecting to active game
+            console.log('[Client] Reconnecting to active game...');
+            multiplayerState.myPlayerId = data.yourId;
+            startMultiplayerGame(data.gameState);
+            showNotification('Reconnected to game!', 'success');
+        } else {
+            // New game starting
+            console.log('[Client] Starting multiplayer game...');
+            startMultiplayerGame(data.gameState);
+        }
     } else if (data.type === 'game-action') {
         handleGameAction(data.action);
     } else if (data.type === 'game-state-sync') {
@@ -1396,15 +1482,22 @@ function restoreGameState(savedState) {
         gameState.numTeams = savedState.gameState.numTeams;
         gameState.multiplayerMode = savedState.gameState.multiplayerMode;
         
-        // Re-render UI
+        // Re-render UI based on game state
         hideAllScreens();
-        document.getElementById('game-screen').style.display = 'block';
-        renderBoard();
-        renderPlayerHand();
-        updateTurnInfo();
-        updateSequenceCounts();
+        if (gameState.gameStarted) {
+            // Game has started, show game screen
+            document.getElementById('game-screen').style.display = 'block';
+            renderBoard();
+            renderPlayerHand();
+            updateTurnInfo();
+            updateSequenceCounts();
+        } else {
+            // Game hasn't started, show lobby
+            showLobby();
+            updateLobbyUI();
+        }
         
-        console.log('[Persistence] Game state restored successfully');
+        console.log('[Persistence] Game state restored successfully. Game started:', gameState.gameStarted);
         return true;
     } catch (e) {
         console.error('[Persistence] Failed to restore state:', e);
