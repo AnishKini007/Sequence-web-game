@@ -637,8 +637,20 @@ function setupClientConnection(conn) {
     });
     
     conn.on('close', () => {
-        alert('Disconnected from host');
-        showMainMenu();
+        console.log('[Client] Connection to host closed');
+        
+        // Save state immediately
+        if (gameState.gameStarted) {
+            saveGameState();
+            showConnectionStatus('Disconnected from host. Attempting to reconnect...', 'connecting');
+            
+            // Try to reconnect instead of going to main menu
+            attemptReconnection();
+        } else {
+            // In lobby, just show message and go back
+            alert('Disconnected from host');
+            showMainMenu();
+        }
     });
 }
 
@@ -697,6 +709,14 @@ function handleClientMessage(data) {
             // New game starting
             console.log('[Client] Starting multiplayer game...');
             startMultiplayerGame(data.gameState);
+        }
+    } else if (data.type === 'host-reconnected') {
+        console.log('[Client] Host reconnected');
+        showNotification('Host reconnected!', 'success');
+        
+        // If game state provided, sync it
+        if (data.gameState) {
+            syncGameState(data.gameState);
         }
     } else if (data.type === 'game-action') {
         handleGameAction(data.action);
@@ -907,11 +927,21 @@ function handleGameAction(action) {
         gameState.multiplayerMode = false;
         placeChip(action.row, action.col, action.color);
         gameState.multiplayerMode = wasMultiplayer;
+        
+        // Save state after every action
+        if (multiplayerState.isOnline && gameState.gameStarted) {
+            saveGameState();
+        }
     } else if (action.type === 'remove-chip') {
         const wasMultiplayer = gameState.multiplayerMode;
         gameState.multiplayerMode = false;
         removeChip(action.row, action.col);
         gameState.multiplayerMode = wasMultiplayer;
+        
+        // Save state after every action
+        if (multiplayerState.isOnline && gameState.gameStarted) {
+            saveGameState();
+        }
     } else if (action.type === 'next-turn') {
         console.log('[Client] Received next-turn action');
         gameState.currentPlayerIndex = action.playerIndex;
@@ -937,6 +967,11 @@ function handleGameAction(action) {
             }
         }
         updateUI();
+        
+        // Save state after turn change
+        if (multiplayerState.isOnline && gameState.gameStarted) {
+            saveGameState();
+        }
     } else if (action.type === 'update-sequences') {
         // Update sequence counts without recalculating
         gameState.sequenceCounts = action.sequenceCounts;
@@ -1550,15 +1585,114 @@ function attemptReconnection() {
             console.log('[Reconnect] Attempting peer reconnection');
             multiplayerState.peer.reconnect();
         } else if (multiplayerState.isHost) {
-            console.log('[Reconnect] Recreating host peer');
-            createGameRoom();
+            console.log('[Reconnect] Recreating host peer with preserved state');
+            recreateHostConnection();
         } else {
             console.log('[Reconnect] Rejoining as client');
-            joinGameRoom();
+            recreateClientConnection();
         }
         
         multiplayerState.isReconnecting = false;
     }, backoff);
+}
+
+// Recreate host connection during reconnection (preserves state)
+function recreateHostConnection() {
+    if (!multiplayerState.gameId) {
+        console.error('[Reconnect] No game ID found for host reconnection');
+        return;
+    }
+    
+    console.log('[Reconnect] Recreating host peer with ID:', multiplayerState.gameId);
+    multiplayerState.peer = new Peer(multiplayerState.gameId, PEER_CONFIG);
+    
+    multiplayerState.peer.on('open', (id) => {
+        console.log('[Reconnect] Host peer reopened with ID:', id);
+        setupHostConnections();
+        handleReconnectionSuccess();
+        
+        // Reconnect to all players
+        broadcastToAll({
+            type: 'host-reconnected',
+            gameState: gameState.gameStarted ? serializeGameState() : null
+        });
+    });
+    
+    multiplayerState.peer.on('error', (err) => {
+        console.error('[Reconnect] Host peer error:', err);
+        if (err.type === 'unavailable-id') {
+            // ID taken, try with peer.reconnect instead
+            console.log('[Reconnect] ID unavailable, trying alternative reconnection');
+            if (multiplayerState.reconnectAttempts < multiplayerState.maxReconnectAttempts) {
+                setTimeout(() => attemptReconnection(), 2000);
+            }
+        }
+    });
+    
+    multiplayerState.peer.on('disconnected', () => {
+        console.log('[Host] Peer disconnected during reconnection');
+        if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+            saveGameState();
+            attemptReconnection();
+        }
+    });
+}
+
+// Recreate client connection during reconnection (preserves state)
+function recreateClientConnection() {
+    if (!multiplayerState.gameId) {
+        console.error('[Reconnect] No game ID found for client reconnection');
+        return;
+    }
+    
+    console.log('[Reconnect] Recreating client peer to rejoin:', multiplayerState.gameId);
+    multiplayerState.peer = new Peer(PEER_CONFIG);
+    
+    multiplayerState.peer.on('open', (id) => {
+        console.log('[Reconnect] Client peer opened, attempting to rejoin host');
+        const conn = multiplayerState.peer.connect(multiplayerState.gameId, {
+            reliable: true,
+            serialization: 'json',
+            metadata: { playerName: multiplayerState.playerName }
+        });
+        
+        conn.on('open', () => {
+            console.log('[Reconnect] Successfully reconnected to host');
+            
+            // Send join request to reclaim slot
+            conn.send({
+                type: 'join',
+                playerName: multiplayerState.playerName,
+                peerId: id
+            });
+            
+            multiplayerState.connections = [conn];
+            setupClientConnection(conn);
+            handleReconnectionSuccess();
+        });
+        
+        conn.on('error', (err) => {
+            console.error('[Reconnect] Connection error:', err);
+            if (multiplayerState.reconnectAttempts < multiplayerState.maxReconnectAttempts) {
+                setTimeout(() => attemptReconnection(), 2000);
+            }
+        });
+    });
+    
+    multiplayerState.peer.on('error', (err) => {
+        console.error('[Reconnect] Client peer error:', err);
+        if (multiplayerState.reconnectAttempts < multiplayerState.maxReconnectAttempts) {
+            setTimeout(() => attemptReconnection(), 2000);
+        }
+    });
+    
+    multiplayerState.peer.on('disconnected', () => {
+        console.log('[Client] Peer disconnected during reconnection');
+        if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+            saveGameState();
+            attemptReconnection();
+        }
+    });
 }
 
 // Handle successful reconnection
@@ -1603,7 +1737,7 @@ function startAutoSave() {
         if (gameState.gameStarted && multiplayerState.isOnline) {
             saveGameState();
         }
-    }, 30000); // Auto-save every 30 seconds
+    }, 5000); // Auto-save every 5 seconds
 }
 
 function stopAutoSave() {
