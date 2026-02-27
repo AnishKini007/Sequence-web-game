@@ -462,6 +462,11 @@ function setupHostConnections() {
         
         conn.on('close', () => {
             handlePlayerDisconnect(conn.peer);
+            // Remove closed connection from array
+            const index = multiplayerState.connections.indexOf(conn);
+            if (index > -1) {
+                multiplayerState.connections.splice(index, 1);
+            }
         });
         
         multiplayerState.connections.push(conn);
@@ -473,13 +478,51 @@ function handleHostMessage(conn, data) {
     console.log('Host received:', data);
     
     if (data.type === 'join') {
-        // Add new player to lobby
-        const playerId = multiplayerState.lobbyPlayers.length;
+        // Check if this is a reconnecting player
+        const existingPlayer = multiplayerState.lobbyPlayers.find(p => 
+            p.name === data.playerName || p.peerId === data.peerId
+        );
         
-        if (playerId >= multiplayerState.maxPlayers) {
+        if (existingPlayer) {
+            // Player is reconnecting - restore their slot
+            console.log('Player reconnecting:', data.playerName);
+            existingPlayer.connected = true;
+            existingPlayer.peerId = data.peerId; // Update peerId in case it changed
+            
+            // Send lobby state to reconnecting player
+            conn.send({
+                type: 'lobby-state',
+                players: multiplayerState.lobbyPlayers,
+                maxPlayers: multiplayerState.maxPlayers,
+                numTeams: multiplayerState.numTeams,
+                gameId: multiplayerState.gameId,
+                yourId: existingPlayer.id,
+                isReconnect: true
+            });
+            
+            // Broadcast player reconnection to all players
+            broadcastToAll({
+                type: 'player-reconnected',
+                player: existingPlayer,
+                players: multiplayerState.lobbyPlayers
+            });
+            
+            return;
+        }
+        
+        // New player joining - check if slots available
+        const connectedPlayers = multiplayerState.lobbyPlayers.filter(p => p.connected).length;
+        
+        if (connectedPlayers >= multiplayerState.maxPlayers) {
             conn.send({ type: 'error', message: 'Game is full' });
             conn.close();
             return;
+        }
+        
+        // Find first available slot (might be a disconnected player's slot)
+        let playerId = multiplayerState.lobbyPlayers.findIndex(p => !p.connected);
+        if (playerId === -1) {
+            playerId = multiplayerState.lobbyPlayers.length;
         }
         
         const newPlayer = {
@@ -490,7 +533,13 @@ function handleHostMessage(conn, data) {
             connected: true
         };
         
-        multiplayerState.lobbyPlayers.push(newPlayer);
+        if (playerId < multiplayerState.lobbyPlayers.length) {
+            // Replace disconnected player's slot
+            multiplayerState.lobbyPlayers[playerId] = newPlayer;
+        } else {
+            // Add new slot
+            multiplayerState.lobbyPlayers.push(newPlayer);
+        }
         
         // Send lobby state to new player
         conn.send({
@@ -543,9 +592,21 @@ function handleClientMessage(data) {
         hideConnectionStatus();
         showLobby();
         updateLobbyUI();
+        
+        if (data.isReconnect) {
+            showNotification('Successfully reconnected to the game!', 'success');
+        }
     } else if (data.type === 'player-joined') {
         multiplayerState.lobbyPlayers = data.players;
         updateLobbyUI();
+    } else if (data.type === 'player-reconnected') {
+        multiplayerState.lobbyPlayers = data.players;
+        updateLobbyUI();
+        showNotification(`${data.player.name} reconnected`, 'success');
+    } else if (data.type === 'player-disconnected') {
+        multiplayerState.lobbyPlayers = data.players;
+        updateLobbyUI();
+        showNotification(`${data.playerName} disconnected`, 'warning');
     } else if (data.type === 'start-game') {
         console.log('[Client] Received start-game message, hiding connection status...');
         hideConnectionStatus();
@@ -589,8 +650,9 @@ function updateLobbyUI() {
     shareLinkInput.value = shareLink;
     gameIdDisplay.textContent = multiplayerState.gameId;
     
-    // Update player count
-    lobbyCount.textContent = multiplayerState.lobbyPlayers.length;
+    // Update player count (only count connected players)
+    const connectedCount = multiplayerState.lobbyPlayers.filter(p => p.connected).length;
+    lobbyCount.textContent = connectedCount;
     lobbyMax.textContent = multiplayerState.maxPlayers;
     
     // Update player list
@@ -600,13 +662,16 @@ function updateLobbyUI() {
     multiplayerState.lobbyPlayers.forEach((player, index) => {
         const playerDiv = document.createElement('div');
         playerDiv.className = 'player-item';
+        if (!player.connected) {
+            playerDiv.style.opacity = '0.5';
+        }
         
         const teamIndex = index % multiplayerState.numTeams;
         const teamColor = teamColors[teamIndex];
         
         playerDiv.innerHTML = `
             <div class="player-name">
-                ${player.name}
+                ${player.name}${!player.connected ? ' (disconnected)' : ''}
                 ${player.isHost ? '<span class="host-badge">HOST</span>' : ''}
             </div>
             <div class="player-status">
@@ -623,8 +688,8 @@ function updateLobbyUI() {
         hostControls.style.display = 'block';
         waitingMessage.style.display = 'none';
         
-        // Enable start button if we have at least 2 players
-        startGameBtn.disabled = multiplayerState.lobbyPlayers.length < 2;
+        // Enable start button if we have at least 2 connected players
+        startGameBtn.disabled = connectedCount < 2;
     } else {
         hostControls.style.display = 'none';
         waitingMessage.style.display = 'block';
@@ -1036,7 +1101,18 @@ function handlePlayerDisconnect(peerId) {
     const player = multiplayerState.lobbyPlayers.find(p => p.peerId === peerId);
     if (player) {
         console.log('Player disconnected:', player.name);
-        // Could implement reconnection logic here
+        player.connected = false;
+        
+        // Notify all connected players
+        broadcastToAll({
+            type: 'player-disconnected',
+            playerId: player.id,
+            playerName: player.name,
+            players: multiplayerState.lobbyPlayers
+        });
+        
+        // Save state to allow reconnection
+        saveGameState();
     }
 }
 
@@ -1189,6 +1265,37 @@ function hideConnectionStatus() {
     if (statusDiv) {
         statusDiv.style.display = 'none';
     }
+}
+
+// Show temporary notification to user
+function showNotification(message, type = 'info') {
+    let notificationDiv = document.createElement('div');
+    notificationDiv.className = `notification ${type}`;
+    notificationDiv.textContent = message;
+    notificationDiv.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        background: ${type === 'success' ? '#4CAF50' : type === 'warning' ? '#ff9800' : '#2196F3'};
+        color: white;
+        border-radius: 5px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        z-index: 10000;
+        animation: slideIn 0.3s ease-out;
+    `;
+    
+    document.body.appendChild(notificationDiv);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+        notificationDiv.style.animation = 'slideOut 0.3s ease-out';
+        setTimeout(() => {
+            if (notificationDiv.parentNode) {
+                notificationDiv.parentNode.removeChild(notificationDiv);
+            }
+        }, 300);
+    }, 3000);
 }
 
 // Cleanup connection
