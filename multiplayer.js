@@ -12,7 +12,10 @@ let multiplayerState = {
     maxPlayers: 4,
     numTeams: 2,
     myPlayerId: null,
-    connectionTimeout: null
+    connectionTimeout: null,
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 5,
+    isReconnecting: false
 };
 
 // Detect iOS devices (iPhone, iPad)
@@ -139,6 +142,71 @@ function addIOSWarningToJoinScreen() {
 function showMainMenu() {
     hideAllScreens();
     document.getElementById('main-menu').style.display = 'flex';
+    
+    // Check for saved game state
+    checkForSavedGame();
+}
+
+// Check if there's a saved game and offer to restore
+function checkForSavedGame() {
+    const savedState = loadGameState();
+    if (savedState && savedState.multiplayerState.isOnline) {
+        const age = Math.floor((Date.now() - savedState.timestamp) / 1000 / 60); // minutes
+        const message = `Found a saved game from ${age} minute(s) ago.\n\nWould you like to try reconnecting?`;
+        
+        if (confirm(message)) {
+            console.log('[Persistence] User chose to restore saved game');
+            attemptRestoreAndReconnect(savedState);
+        } else {
+            console.log('[Persistence] User declined to restore');
+            clearGameState();
+        }
+    }
+}
+
+// Attempt to restore game and reconnect
+function attemptRestoreAndReconnect(savedState) {
+    if (!restoreGameState(savedState)) {
+        alert('Failed to restore game state. Starting fresh.');
+        clearGameState();
+        return;
+    }
+    
+    showConnectionStatus('Attempting to reconnect...', 'connecting');
+    
+    // Restore multiplayer connection
+    multiplayerState.isOnline = true;
+    
+    if (savedState.multiplayerState.isHost) {
+        // Recreate host
+        multiplayerState.peer = new Peer(savedState.multiplayerState.gameId, PEER_CONFIG);
+        setupHostCallbacks();
+    } else {
+        // Rejoin as client
+        multiplayerState.peer = new Peer(PEER_CONFIG);
+        multiplayerState.peer.on('open', (id) => {
+            const conn = multiplayerState.peer.connect(savedState.multiplayerState.gameId, {
+                reliable: true,
+                serialization: 'json',
+                metadata: { playerName: savedState.multiplayerState.playerName }
+            });
+            
+            conn.on('open', () => {
+                console.log('[Reconnect] Successfully reconnected to game');
+                multiplayerState.connections.push(conn);
+                setupClientConnection(conn);
+                handleReconnectionSuccess();
+                startAutoSave();
+            });
+            
+            conn.on('error', (err) => {
+                console.error('[Reconnect] Failed to reconnect:', err);
+                hideConnectionStatus();
+                alert('Failed to reconnect to the game. The host may be offline.');
+                showMainMenu();
+            });
+        });
+    }
 }
 
 function showLocalSetup() {
@@ -228,8 +296,17 @@ function createGameRoom() {
     });
     
     multiplayerState.peer.on('disconnected', () => {
-        console.log('Peer disconnected, attempting to reconnect...');
-        multiplayerState.peer.reconnect();
+        console.log('[Host] Peer disconnected');
+        if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+            saveGameState();
+            attemptReconnection();
+        }
+    });
+    
+    multiplayerState.peer.on('open', (id) => {
+        if (multiplayerState.reconnectAttempts > 0) {
+            handleReconnectionSuccess();
+        }
     });
 }
 
@@ -360,8 +437,17 @@ function joinGameRoom() {
     });
     
     multiplayerState.peer.on('disconnected', () => {
-        console.log('Peer disconnected, attempting to reconnect...');
-        multiplayerState.peer.reconnect();
+        console.log('[Client] Peer disconnected');
+        if (multiplayerState.isOnline && !multiplayerState.isReconnecting) {
+            saveGameState();
+            attemptReconnection();
+        }
+    });
+    
+    multiplayerState.peer.on('open', (id) => {
+        if (multiplayerState.reconnectAttempts > 0) {
+            handleReconnectionSuccess();
+        }
     });
 }
 
@@ -581,6 +667,12 @@ function startOnlineGame() {
     
     // Start monitoring connection quality
     startConnectionMonitoring();
+    
+    // Start auto-saving game state
+    startAutoSave();
+    
+    // Save initial state
+    saveGameState();
 }
 
 // Start multiplayer game for clients
@@ -610,6 +702,12 @@ function startMultiplayerGame(serializedState) {
     
     // Start monitoring connection quality
     startConnectionMonitoring();
+    
+    // Start auto-saving game state
+    startAutoSave();
+    
+    // Save initial state
+    saveGameState();
 }
 
 // Initialize multiplayer game
@@ -1094,7 +1192,231 @@ function hideConnectionStatus() {
 }
 
 // Cleanup connection
+// ===== STATE PERSISTENCE =====
+// Save game state to localStorage for reconnection
+function saveGameState() {
+    try {
+        const stateToSave = {
+            multiplayerState: {
+                isOnline: multiplayerState.isOnline,
+                isHost: multiplayerState.isHost,
+                playerName: multiplayerState.playerName,
+                gameId: multiplayerState.gameId,
+                lobbyPlayers: multiplayerState.lobbyPlayers,
+                maxPlayers: multiplayerState.maxPlayers,
+                numTeams: multiplayerState.numTeams,
+                myPlayerId: multiplayerState.myPlayerId
+            },
+            gameState: {
+                players: gameState.players,
+                teams: gameState.teams,
+                currentPlayerIndex: gameState.currentPlayerIndex,
+                board: gameState.board,
+                sequences: gameState.sequences,
+                sequenceCounts: gameState.sequenceCounts,
+                gameStarted: gameState.gameStarted,
+                numTeams: gameState.numTeams,
+                multiplayerMode: gameState.multiplayerMode
+            },
+            timestamp: Date.now()
+        };
+        localStorage.setItem('sequenceGameState', JSON.stringify(stateToSave));
+        console.log('[Persistence] Game state saved');
+    } catch (e) {
+        console.error('[Persistence] Failed to save state:', e);
+    }
+}
+
+// Load game state from localStorage
+function loadGameState() {
+    try {
+        const savedState = localStorage.getItem('sequenceGameState');
+        if (!savedState) return null;
+        
+        const state = JSON.parse(savedState);
+        
+        // Check if state is recent (within 24 hours)
+        const age = Date.now() - state.timestamp;
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        
+        if (age > maxAge) {
+            console.log('[Persistence] Saved state too old, clearing');
+            clearGameState();
+            return null;
+        }
+        
+        console.log('[Persistence] Loaded state from', Math.floor(age / 1000), 'seconds ago');
+        return state;
+    } catch (e) {
+        console.error('[Persistence] Failed to load state:', e);
+        return null;
+    }
+}
+
+// Clear saved game state
+function clearGameState() {
+    try {
+        localStorage.removeItem('sequenceGameState');
+        console.log('[Persistence] Cleared saved state');
+    } catch (e) {
+        console.error('[Persistence] Failed to clear state:', e);
+    }
+}
+
+// Restore game state after reconnection
+function restoreGameState(savedState) {
+    if (!savedState) return false;
+    
+    try {
+        // Restore multiplayer state
+        multiplayerState.isOnline = savedState.multiplayerState.isOnline;
+        multiplayerState.isHost = savedState.multiplayerState.isHost;
+        multiplayerState.playerName = savedState.multiplayerState.playerName;
+        multiplayerState.gameId = savedState.multiplayerState.gameId;
+        multiplayerState.lobbyPlayers = savedState.multiplayerState.lobbyPlayers;
+        multiplayerState.maxPlayers = savedState.multiplayerState.maxPlayers;
+        multiplayerState.numTeams = savedState.multiplayerState.numTeams;
+        multiplayerState.myPlayerId = savedState.multiplayerState.myPlayerId;
+        
+        // Restore game state
+        gameState.players = savedState.gameState.players;
+        gameState.teams = savedState.gameState.teams;
+        gameState.currentPlayerIndex = savedState.gameState.currentPlayerIndex;
+        gameState.board = savedState.gameState.board;
+        gameState.sequences = savedState.gameState.sequences;
+        gameState.sequenceCounts = savedState.gameState.sequenceCounts;
+        gameState.gameStarted = savedState.gameState.gameStarted;
+        gameState.numTeams = savedState.gameState.numTeams;
+        gameState.multiplayerMode = savedState.gameState.multiplayerMode;
+        
+        // Re-render UI
+        hideAllScreens();
+        document.getElementById('game-screen').style.display = 'block';
+        renderBoard();
+        renderPlayerHand();
+        updateTurnInfo();
+        updateSequenceCounts();
+        
+        console.log('[Persistence] Game state restored successfully');
+        return true;
+    } catch (e) {
+        console.error('[Persistence] Failed to restore state:', e);
+        return false;
+    }
+}
+
+// ===== RECONNECTION SUPPORT =====
+// Attempt to reconnect after disconnection
+function attemptReconnection() {
+    if (multiplayerState.isReconnecting) {
+        console.log('[Reconnect] Already attempting reconnection');
+        return;
+    }
+    
+    multiplayerState.isReconnecting = true;
+    multiplayerState.reconnectAttempts++;
+    
+    showConnectionStatus(`Reconnecting... (${multiplayerState.reconnectAttempts}/${multiplayerState.maxReconnectAttempts})`, 'connecting');
+    
+    console.log(`[Reconnect] Attempt ${multiplayerState.reconnectAttempts} of ${multiplayerState.maxReconnectAttempts}`);
+    
+    if (multiplayerState.reconnectAttempts > multiplayerState.maxReconnectAttempts) {
+        console.log('[Reconnect] Max attempts reached, giving up');
+        showConnectionStatus('Connection lost', 'error');
+        setTimeout(() => {
+            hideConnectionStatus();
+            alert('Connection lost. The game has been saved. You can try rejoining using the same Game ID.');
+            saveGameState();
+            showMainMenu();
+        }, 2000);
+        multiplayerState.isReconnecting = false;
+        return;
+    }
+    
+    // Try to reconnect with exponential backoff
+    const backoff = Math.min(1000 * Math.pow(2, multiplayerState.reconnectAttempts - 1), 10000);
+    
+    setTimeout(() => {
+        if (multiplayerState.peer && !multiplayerState.peer.disconnected) {
+            console.log('[Reconnect] Peer already connected');
+            multiplayerState.isReconnecting = false;
+            multiplayerState.reconnectAttempts = 0;
+            showConnectionStatus('Reconnected!', 'connected');
+            setTimeout(hideConnectionStatus, 2000);
+            return;
+        }
+        
+        if (multiplayerState.peer) {
+            console.log('[Reconnect] Attempting peer reconnection');
+            multiplayerState.peer.reconnect();
+        } else if (multiplayerState.isHost) {
+            console.log('[Reconnect] Recreating host peer');
+            createGameRoom();
+        } else {
+            console.log('[Reconnect] Rejoining as client');
+            joinGameRoom();
+        }
+        
+        multiplayerState.isReconnecting = false;
+    }, backoff);
+}
+
+// Handle successful reconnection
+function handleReconnectionSuccess() {
+    console.log('[Reconnect] Successfully reconnected');
+    multiplayerState.reconnectAttempts = 0;
+    multiplayerState.isReconnecting = false;
+    showConnectionStatus('Reconnected!', 'connected');
+    setTimeout(hideConnectionStatus, 3000);
+    
+    // Save current state
+    saveGameState();
+}
+
+// ===== MOBILE BACKGROUND HANDLING =====
+// Handle page visibility changes (mobile backgrounding)
+function handleVisibilityChange() {
+    if (document.hidden) {
+        console.log('[Visibility] Page hidden - saving state');
+        saveGameState();
+    } else {
+        console.log('[Visibility] Page visible - checking connection');
+        
+        // Check if we need to reconnect
+        if (multiplayerState.isOnline && multiplayerState.peer && multiplayerState.peer.disconnected) {
+            console.log('[Visibility] Peer disconnected, attempting reconnection');
+            attemptReconnection();
+        }
+    }
+}
+
+// Initialize visibility tracking
+document.addEventListener('visibilitychange', handleVisibilityChange);
+
+// Save state periodically during gameplay
+let autoSaveInterval = null;
+
+function startAutoSave() {
+    if (autoSaveInterval) clearInterval(autoSaveInterval);
+    
+    autoSaveInterval = setInterval(() => {
+        if (gameState.gameStarted && multiplayerState.isOnline) {
+            saveGameState();
+        }
+    }, 30000); // Auto-save every 30 seconds
+}
+
+function stopAutoSave() {
+    if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+    }
+}
+
 function cleanupConnection() {
+    // Stop auto-saving
+    stopAutoSave();
+    
     if (multiplayerState.connectionTimeout) {
         clearTimeout(multiplayerState.connectionTimeout);
         multiplayerState.connectionTimeout = null;
@@ -1112,6 +1434,8 @@ function cleanupConnection() {
     }
     
     multiplayerState.connections = [];
+    multiplayerState.reconnectAttempts = 0;
+    multiplayerState.isReconnecting = false;
 }
 
 // Initialize multiplayer on page load
